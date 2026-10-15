@@ -11,9 +11,12 @@ use zip::ZipArchive;
 
 use crate::{
     core::{maven::MavenCoordinate, version::LibraryArtifact},
-    install::{client::{install_version_files, load_version_json, write_version_json}},
+    install::client::{install_version_files_controlled, load_version_json, write_version_json},
     io::{hash::sha1_file, paths::safe_join},
-    net::download::{execute_plan, DownloadPlan, DownloadTask},
+    net::{
+        control::DownloadControl,
+        download::{execute_plan_controlled, DownloadPlan, DownloadTask},
+    },
     progress::ProgressReporter,
     LauncherError, Result,
 };
@@ -42,6 +45,7 @@ pub(crate) fn install_legacy_forge_client(
     installer_path: &Path,
     minecraft_version: &str,
     reporter: &mut dyn ProgressReporter,
+    control: &DownloadControl,
 ) -> Result<Option<String>> {
     let Some(mut profile) = read_legacy_profile(installer_path)? else {
         return Ok(None);
@@ -56,20 +60,21 @@ pub(crate) fn install_legacy_forge_client(
         });
     }
 
-    let version_id = profile
-        .version_info
-        .id
-        .clone()
-        .ok_or_else(|| LauncherError::MissingField {
-            context: "legacy Forge versionInfo".to_string(),
-            field: "id".to_string(),
-        })?;
+    let version_id =
+        profile
+            .version_info
+            .id
+            .clone()
+            .ok_or_else(|| LauncherError::MissingField {
+                context: "legacy Forge versionInfo".to_string(),
+                field: "id".to_string(),
+            })?;
 
-    install_universal_library(minecraft_dir, &mut profile, reporter)?;
+    install_universal_library(minecraft_dir, &mut profile, reporter, control)?;
     write_version_json(minecraft_dir, &profile.version_info)?;
 
     let merged = load_version_json(minecraft_dir, &version_id)?;
-    install_version_files(&merged, minecraft_dir, reporter)?;
+    install_version_files_controlled(&merged, minecraft_dir, reporter, control)?;
     Ok(Some(version_id))
 }
 
@@ -100,12 +105,15 @@ fn install_universal_library(
     minecraft_dir: &Path,
     profile: &mut LegacyForgeInstallerProfile,
     reporter: &mut dyn ProgressReporter,
+    control: &DownloadControl,
 ) -> Result<()> {
     let coordinate = MavenCoordinate::parse(&profile.install.path)?;
     let default_artifact_path = coordinate.artifact_path();
-    let parent = default_artifact_path.parent().ok_or_else(|| LauncherError::Other {
-        message: "Forge universal artifact has no Maven directory".to_string(),
-    })?;
+    let parent = default_artifact_path
+        .parent()
+        .ok_or_else(|| LauncherError::Other {
+            message: "Forge universal artifact has no Maven directory".to_string(),
+        })?;
     let relative_path = safe_join(parent, &profile.install.file_path)?;
     let destination = safe_join(minecraft_dir.join("libraries"), &relative_path)?;
 
@@ -127,18 +135,18 @@ fn install_universal_library(
             url: url.clone(),
             destination: destination.clone(),
             checksum: None,
+            size: None,
             label: format!("Forge universal {}", profile.install.minecraft),
         }],
     };
-    execute_plan(&plan, reporter)?;
+    execute_plan_controlled(&plan, reporter, control)?;
 
     let relative_path = relative_path.to_string_lossy().replace('\\', "/");
     let sha1 = sha1_file(&destination)?;
-    let size = i64::try_from(fs::metadata(&destination)?.len()).map_err(|_| {
-        LauncherError::Other {
+    let size =
+        i64::try_from(fs::metadata(&destination)?.len()).map_err(|_| LauncherError::Other {
             message: "Forge universal artifact is too large".to_string(),
-        }
-    })?;
+        })?;
 
     let forge_library = profile
         .version_info

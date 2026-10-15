@@ -67,6 +67,7 @@ pub fn plan_library_downloads_for_platform(
                 url,
                 destination: minecraft_dir.join("libraries").join(&path),
                 checksum: None,
+                size: None,
                 label: format!("library {}", library.name),
             });
         }
@@ -83,6 +84,7 @@ fn download_task(
         url: artifact.url.clone(),
         destination: minecraft_dir.join("libraries").join(&artifact.path),
         checksum: Some(Checksum::Sha1(artifact.sha1.clone())),
+        size: Some(artifact.size.unsigned_abs()),
         label: library.name.clone(),
     }
 }

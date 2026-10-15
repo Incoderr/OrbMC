@@ -18,5 +18,6 @@ pub use crate::{
         common::{LoaderSpec, LoaderVersion},
         LoaderKind,
     },
+    net::control::DownloadControl,
     progress::{ProgressEvent, ProgressReporter},
 };

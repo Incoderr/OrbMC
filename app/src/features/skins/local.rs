@@ -203,6 +203,7 @@ fn ensure_mod(profile: &InstanceProfile, directory: &Path, backend: Backend) -> 
                 url: asset.url,
                 destination: download.clone(),
                 checksum: asset.sha1.clone().map(Checksum::Sha1),
+                size: Some(asset.size),
                 label: format!("{} · локальный скин", asset.filename),
             }],
         };

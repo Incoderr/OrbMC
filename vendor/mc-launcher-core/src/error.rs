@@ -84,13 +84,18 @@ pub enum LauncherError {
         /// Requested loader version selector or value.
         version: String,
     },
+    /// The install or download was cancelled through its control handle.
+    #[error("install cancelled")]
+    InstallCancelled,
     /// A Forge or NeoForge installer process failed.
-    #[error("{loader:?} installer failed with status {status:?}")]
+    #[error("{loader:?} installer failed with status {status:?}\n{output}")]
     InstallerFailed {
         /// Loader family whose installer failed.
         loader: LoaderKind,
         /// Process exit status code, if available.
         status: Option<i32>,
+        /// Tail of the installer's combined stdout and stderr output.
+        output: String,
     },
     /// Required metadata was missing from a version/profile document.
     #[error("missing field {field} in {context}")]

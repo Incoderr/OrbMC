@@ -10,9 +10,9 @@ use serde::Deserialize;
 use crate::{
     compatibility::{apply_compatibility, CompatibilityPolicy},
     core::version::VersionJson,
-    net::{download::execute_plan, http},
+    net::{control::DownloadControl, download::execute_plan_controlled, http},
     platform::Platform,
-    progress::ProgressReporter,
+    progress::{InstallStage, ProgressEvent, ProgressReporter},
     LauncherError, Result,
 };
 
@@ -106,6 +106,8 @@ pub fn load_version_json(minecraft_dir: impl AsRef<Path>, version_id: &str) -> R
 /// Installs client jar, libraries, assets, and native libraries for a version.
 ///
 /// Compatibility patches are applied automatically for the current platform.
+/// The install cannot be paused or cancelled; see
+/// [`install_version_files_controlled`].
 ///
 /// # Errors
 ///
@@ -116,12 +118,32 @@ pub fn install_version_files(
     minecraft_dir: impl AsRef<Path>,
     reporter: &mut dyn ProgressReporter,
 ) -> Result<()> {
-    install_version_files_for_platform(
+    install_version_files_controlled(version, minecraft_dir, reporter, &DownloadControl::new())
+}
+
+/// Installs client jar, libraries, assets, and native libraries for a version
+/// that can be paused and cancelled.
+///
+/// Compatibility patches are applied automatically for the current platform.
+///
+/// # Errors
+///
+/// Returns [`crate::LauncherError`] if planning, downloads, checksums, asset
+/// decoding, or native extraction fails, and
+/// [`crate::LauncherError::InstallCancelled`] after cancellation.
+pub fn install_version_files_controlled(
+    version: &VersionJson,
+    minecraft_dir: impl AsRef<Path>,
+    reporter: &mut dyn ProgressReporter,
+    control: &DownloadControl,
+) -> Result<()> {
+    install_version_files_for_platform_controlled(
         version,
         minecraft_dir,
         Platform::current(),
         CompatibilityPolicy::Auto,
         reporter,
+        control,
     )
 }
 
@@ -141,6 +163,32 @@ pub fn install_version_files_for_platform(
     compatibility: CompatibilityPolicy,
     reporter: &mut dyn ProgressReporter,
 ) -> Result<()> {
+    install_version_files_for_platform_controlled(
+        version,
+        minecraft_dir,
+        platform,
+        compatibility,
+        reporter,
+        &DownloadControl::new(),
+    )
+}
+
+/// Installs version files for an explicit platform and compatibility policy,
+/// pausable and cancellable through `control`.
+///
+/// # Errors
+///
+/// Returns [`crate::LauncherError`] if planning, downloads, checksums, asset
+/// decoding, or native extraction fails, and
+/// [`crate::LauncherError::InstallCancelled`] after cancellation.
+pub fn install_version_files_for_platform_controlled(
+    version: &VersionJson,
+    minecraft_dir: impl AsRef<Path>,
+    platform: Platform,
+    compatibility: CompatibilityPolicy,
+    reporter: &mut dyn ProgressReporter,
+    control: &DownloadControl,
+) -> Result<()> {
     let minecraft_dir = minecraft_dir.as_ref();
     let compatibility = apply_compatibility(version, platform, compatibility);
     let version = &compatibility.version;
@@ -152,14 +200,23 @@ pub fn install_version_files_for_platform(
             field: "id".to_string(),
         })?;
 
+    control.checkpoint()?;
     let plan = crate::install::vanilla::plan_vanilla_downloads_for_platform(
         version,
         minecraft_dir,
         platform,
         CompatibilityPolicy::Disabled,
     )?;
-    execute_plan(&plan, reporter)?;
-    crate::install::assets::install_assets(version, minecraft_dir, reporter)?;
+    reporter.report(ProgressEvent::StageStarted {
+        stage: InstallStage::DownloadLibraries,
+    });
+    execute_plan_controlled(&plan, reporter, control)?;
+
+    crate::install::assets::install_assets(version, minecraft_dir, reporter, control)?;
+    control.checkpoint()?;
+    reporter.report(ProgressEvent::StageStarted {
+        stage: InstallStage::ExtractNatives,
+    });
     crate::install::natives::extract_natives_for_platform(
         &version.libraries,
         minecraft_dir,

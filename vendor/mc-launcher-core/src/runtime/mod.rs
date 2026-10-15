@@ -1,8 +1,9 @@
 //! Legacy Java runtime discovery and installation helpers.
 //!
-//! The current high-level launch facade expects callers to choose Java and pass
-//! it through [`crate::command::builder::LaunchOptions::java_executable`]. These
-//! helpers remain for callers that still use the older runtime API.
+//! The high-level facade expects callers to choose Java and pass it through
+//! [`crate::command::builder::LaunchOptions::java_executable`]. These helpers
+//! back that choice: they discover official Mojang runtimes, install them into
+//! `<minecraft_dir>/runtime/<component>`, and resolve the Java executable.
 
 use std::{
     collections::HashMap,
@@ -17,7 +18,7 @@ use reqwest::header;
 
 use crate::{
     types::{
-        runtime_types::{PlatformManifestJson, RuntimeListJson},
+        runtime_types::{PlatformManifestJson, RuntimeListJson, RuntimeListJsonEntry},
         CallbackDict, JvmRuntimeInformation, VersionRuntimeInformation,
     },
     utils::helper::{
@@ -58,6 +59,59 @@ pub fn get_jvm_runtimes() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     } else {
         Err("Platform not found in manifest".into())
     }
+}
+
+/// Parses the Java major version out of a runtime version name such as
+/// `21.0.3` or the legacy `1.8.0_202`.
+fn parse_runtime_major_version(name: &str) -> Option<u32> {
+    let mut components = name
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|component| !component.is_empty())
+        .filter_map(|component| component.parse::<u32>().ok());
+    let first = components.next()?;
+    if first == 1 {
+        components.next()
+    } else {
+        Some(first)
+    }
+}
+
+/// Finds a JVM component from Mojang's runtime manifest whose Java major
+/// version matches `major`.
+///
+/// Component names such as `java-runtime-gamma` are unstable across game
+/// versions, so callers that only know the required Java major version should
+/// resolve the component through this function instead of hardcoding names.
+pub fn find_jvm_component_for_major(
+    major: u32,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let client = reqwest::blocking::Client::new();
+    let manifest_data: RuntimeListJson = client
+        .get(JVM_MANIFEST_URL)
+        .header(header::USER_AGENT, get_user_agent())
+        .send()?
+        .json()?;
+    let platform_string = get_jvm_platform_string();
+    let Some(platform_data) = manifest_data.get(&platform_string) else {
+        return Err("Platform not found in manifest".into());
+    };
+
+    // Sorted so the choice is deterministic when several published components
+    // ship the same Java major version.
+    let mut components: Vec<(&String, &Vec<RuntimeListJsonEntry>)> =
+        platform_data.iter().collect();
+    components.sort_by(|left, right| left.0.cmp(right.0));
+
+    for (component, entries) in components {
+        for entry in entries {
+            if let Some(name) = entry.version.get("name") {
+                if parse_runtime_major_version(name) == Some(major) {
+                    return Ok(Some(component.clone()));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 pub fn get_installed_jvm_runtimes(minecraft_directory: impl AsRef<Path>) -> Vec<String> {
@@ -334,6 +388,15 @@ pub fn get_version_runtime_information(
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn parse_runtime_major_version_from_names() {
+        assert_eq!(parse_runtime_major_version("21.0.3"), Some(21));
+        assert_eq!(parse_runtime_major_version("25"), Some(25));
+        assert_eq!(parse_runtime_major_version("1.8.0_202"), Some(8));
+        assert_eq!(parse_runtime_major_version("8u282-b08"), Some(8));
+        assert_eq!(parse_runtime_major_version(""), None);
+    }
 
     #[test]
     fn debug_get_jvm_platform_string() {

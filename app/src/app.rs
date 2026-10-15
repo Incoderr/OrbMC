@@ -31,6 +31,7 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Theme, ThemeMode, WindowExt, tooltip::Tooltip};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use mc_launcher_core::prelude::DownloadControl;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -579,14 +580,7 @@ impl LauncherApp {
                 let runtime = self.instances.runtime(&profile.id);
                 let busy = self.mods.installed.contains(profile.id, &project.id)
                     || self.mods.installed.is_loading(profile.id)
-                    || matches!(
-                        runtime,
-                        InstanceRuntime::Installing { .. }
-                            | InstanceRuntime::DownloadingMod { .. }
-                            | InstanceRuntime::Launching
-                            | InstanceRuntime::Running { .. }
-                            | InstanceRuntime::Removing
-                    );
+                    || runtime.is_busy();
                 (
                     profile.clone(),
                     busy,
@@ -744,14 +738,7 @@ impl LauncherApp {
             return;
         };
         let runtime = self.instances.runtime(&profile_id);
-        if matches!(
-            runtime,
-            InstanceRuntime::Installing { .. }
-                | InstanceRuntime::DownloadingMod { .. }
-                | InstanceRuntime::Launching
-                | InstanceRuntime::Running { .. }
-                | InstanceRuntime::Removing
-        ) {
+        if runtime.is_busy() {
             return;
         }
 
@@ -849,10 +836,12 @@ impl LauncherApp {
         let minecraft_directory = profile_store::shared_game_directory(&profile.installation_root);
 
         self.instances.mark_installing(id);
+        let control = DownloadControl::new();
+        self.instances.set_install_control(id, control.clone());
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         let worker = std::thread::Builder::new()
             .name(format!("install-minecraft-{id}"))
-            .spawn(move || install_profile(profile, minecraft_directory, sender));
+            .spawn(move || install_profile(profile, minecraft_directory, control, sender));
 
         match worker {
             Ok(_) => self.listen_for_instance_events(receiver, cx),
@@ -938,14 +927,7 @@ impl LauncherApp {
     }
 
     fn launch_into(&mut self, id: uuid::Uuid, world: Option<String>, cx: &mut Context<Self>) {
-        if matches!(
-            self.instances.runtime(&id),
-            InstanceRuntime::Installing { .. }
-                | InstanceRuntime::DownloadingMod { .. }
-                | InstanceRuntime::Launching
-                | InstanceRuntime::Running { .. }
-                | InstanceRuntime::Removing
-        ) {
+        if self.instances.runtime(&id).is_busy() {
             return;
         }
         let Some(profile) = self.instances.profile(id).cloned() else {
@@ -1004,16 +986,11 @@ impl LauncherApp {
 
     fn handle_instance_event(&mut self, event: InstanceWorkerEvent) {
         match event {
-            InstanceWorkerEvent::Progress {
-                id,
-                stage,
-                task,
-                bytes,
-                completed,
-            } => self
-                .instances
-                .update_progress(id, stage, task, bytes, completed),
+            InstanceWorkerEvent::Progress { id, update } => {
+                self.instances.update_progress(id, update);
+            }
             InstanceWorkerEvent::Installed { id, version_id } => {
+                self.instances.finish_install(id);
                 self.instances.mark_installed(id, version_id);
                 if let Err(error) = profile_store::save(self.instances.profiles()) {
                     tracing::error!(%error, "failed to save installed Minecraft profile");
@@ -1023,8 +1000,11 @@ impl LauncherApp {
                     );
                 }
             }
-            InstanceWorkerEvent::InstallFailed { id, message }
-            | InstanceWorkerEvent::LaunchFailed { id, message } => {
+            InstanceWorkerEvent::InstallFailed { id, message } => {
+                self.instances.finish_install(id);
+                self.instances.mark_failed(id, message);
+            }
+            InstanceWorkerEvent::LaunchFailed { id, message } => {
                 self.instances.mark_failed(id, message);
             }
             InstanceWorkerEvent::ProfileRemoved { id } => {
@@ -1040,6 +1020,9 @@ impl LauncherApp {
             InstanceWorkerEvent::Launched { id, process_id } => {
                 self.instances.mark_running(id, process_id);
                 self.persist_profiles();
+            }
+            InstanceWorkerEvent::PreparingJava { id, detail } => {
+                self.instances.mark_preparing_java(id, detail);
             }
             InstanceWorkerEvent::GameExited { id, code, stderr } => {
                 self.instances.mark_game_stopped(id, code, stderr);
@@ -1087,7 +1070,10 @@ impl LauncherApp {
                         .map(|path| path.to_string_lossy().to_string())
                         .unwrap_or_else(|| {
                             locale
-                                .text("Автоматически (Java в PATH)", "Automatic (Java on PATH)")
+                                .text(
+                                    "Автоматически (подбирается нужная Java)",
+                                    "Automatic (the right Java is picked for you)",
+                                )
                                 .to_string()
                         });
                     let memory_mb = content_slider.read(cx).value().end().round() as u32;
@@ -1331,14 +1317,7 @@ impl LauncherApp {
                                                             return;
                                                         };
                                                         let runtime = this.instances.runtime(&id);
-                                                        if matches!(
-                                                            runtime,
-                                                            InstanceRuntime::Installing { .. }
-                                                                | InstanceRuntime::DownloadingMod { .. }
-                                                                | InstanceRuntime::Launching
-                                                                | InstanceRuntime::Running { .. }
-                                                                | InstanceRuntime::Removing
-                                                        ) {
+                                                        if runtime.is_busy() {
                                                             return;
                                                         }
 
@@ -2130,20 +2109,17 @@ impl LauncherApp {
         );
         let detail = if summary.active_count == 1 {
             let mut detail = summary.profile_name;
-            if let Some(task) = summary.task {
-                detail.push_str(&format!(" · {task}"));
-            }
-            if let Some((received, total)) = summary.current_file
-                && (received > 0 || total.is_some())
+            if let Some(total) = summary.total_bytes
+                && (summary.received > 0 || total > 0)
             {
                 detail.push_str(&format!(
-                    " · {}: {}",
-                    locale.text("текущий файл", "current file"),
-                    format_bytes(received)
+                    " · {} / {}",
+                    format_bytes(summary.received),
+                    format_bytes(total)
                 ));
-                if let Some(total) = total {
-                    detail.push_str(&format!(" / {}", format_bytes(total)));
-                }
+            }
+            if summary.speed_bps > 0. {
+                detail.push_str(&format!(" · {}", format_speed(summary.speed_bps)));
             }
             detail
         } else {
@@ -2320,15 +2296,11 @@ impl LauncherApp {
         cx: &Context<Self>,
     ) -> AnyElement {
         let runtime = self.instances.runtime(&profile.id);
-        let is_busy = matches!(
-            &runtime,
-            InstanceRuntime::Installing { .. }
-                | InstanceRuntime::DownloadingMod { .. }
-                | InstanceRuntime::Launching
-                | InstanceRuntime::Running { .. }
-                | InstanceRuntime::Removing
-        );
+        let is_busy = runtime.is_busy();
         let is_installed = profile.installed_version_id.is_some();
+        let install_paused = matches!(&runtime, InstanceRuntime::Installing { paused: true, .. });
+        let install_active = matches!(&runtime, InstanceRuntime::Installing { .. });
+        let mut install_progress = None;
         let (status_text, status_detail, action_text) = match &runtime {
             InstanceRuntime::NotInstalled => (
                 locale.text("Не установлена", "Not installed").to_string(),
@@ -2339,32 +2311,52 @@ impl LauncherApp {
             ),
             InstanceRuntime::Installing {
                 stage,
-                task,
                 received,
-                total,
+                total_bytes,
+                speed_bps,
                 completed_tasks,
+                total_tasks,
+                paused,
             } => {
-                let detail = if let Some(total) = total.filter(|total| *total > 0) {
-                    format!(
-                        "{} · {} · {} / {}",
-                        stage,
-                        task.as_deref().unwrap_or(""),
+                install_progress = install_progress_view(
+                    *received,
+                    *total_bytes,
+                    *speed_bps,
+                    *completed_tasks,
+                    *total_tasks,
+                    palette,
+                    locale,
+                );
+                let mut detail = stage_label(stage, locale).to_owned();
+                if let Some(total) = total_bytes.filter(|total| *total > 0) {
+                    detail.push_str(&format!(
+                        " · {} / {}",
                         format_bytes(*received),
-                        format_bytes(total),
-                    )
-                } else {
-                    format!(
-                        "{} · {} · {} {}",
-                        stage,
-                        task.as_deref().unwrap_or(""),
+                        format_bytes(total)
+                    ));
+                } else if let Some(total_tasks) = total_tasks.filter(|total| *total > 0) {
+                    detail.push_str(&format!(
+                        " · {} / {} {}",
                         completed_tasks,
-                        locale.text("файлов готово", "files complete"),
-                    )
-                };
+                        total_tasks,
+                        locale.text("файлов", "files")
+                    ));
+                }
+                if *speed_bps > 0. {
+                    detail.push_str(&format!(" · {}", format_speed(*speed_bps)));
+                }
                 (
-                    locale.text("Скачивание", "Downloading").to_string(),
+                    if *paused {
+                        locale.text("Пауза", "Paused").to_string()
+                    } else {
+                        locale.text("Скачивание", "Downloading").to_string()
+                    },
                     detail,
-                    locale.text("Скачивание…", "Downloading…"),
+                    if *paused {
+                        locale.text("Продолжить…", "Resume…")
+                    } else {
+                        locale.text("Скачивание…", "Downloading…")
+                    },
                 )
             }
             InstanceRuntime::DownloadingMod { name } => (
@@ -2412,6 +2404,11 @@ impl LauncherApp {
                     .text("Подготавливаем процесс Java…", "Starting the Java process…")
                     .to_string(),
                 locale.text("Запуск…", "Starting…"),
+            ),
+            InstanceRuntime::PreparingJava { detail } => (
+                locale.text("Подготовка Java", "Preparing Java").to_string(),
+                detail.clone(),
+                locale.text("Подготовка…", "Preparing…"),
             ),
             InstanceRuntime::Running { process_id } => (
                 locale.text("Игра запущена", "Game is running").to_string(),
@@ -2528,6 +2525,7 @@ impl LauncherApp {
                             .child(status_text),
                     ),
             )
+            .children(install_progress)
             .child(
                 div()
                     .text_size(px(11.))
@@ -2540,6 +2538,63 @@ impl LauncherApp {
                     .items_center()
                     .justify_end()
                     .gap_2()
+                    .when(install_active, |row| {
+                        let pause_label = if install_paused {
+                            locale.text("Продолжить", "Resume").to_owned()
+                        } else {
+                            locale.text("Пауза", "Pause").to_owned()
+                        };
+                        let cancel_label = locale
+                            .text("Отменить установку", "Cancel install")
+                            .to_owned();
+                        row.child(
+                            UiButton::new(format!("pause-instance-{profile_id}"))
+                                .px_3()
+                                .py_2()
+                                .rounded(px(8.))
+                                .bg(rgb(palette.control))
+                                .text_color(rgb(palette.foreground))
+                                .hover(|style| style.bg(rgb(palette.hover)))
+                                .accessibility_label(pause_label.clone())
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(pause_label.clone()).build(window, cx)
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let applied = if install_paused {
+                                        this.instances.resume_install(profile_id)
+                                    } else {
+                                        this.instances.pause_install(profile_id)
+                                    };
+                                    if applied {
+                                        cx.notify();
+                                    }
+                                }))
+                                .child(if install_paused {
+                                    IconName::Play
+                                } else {
+                                    IconName::Pause
+                                }),
+                        )
+                        .child(
+                            UiButton::new(format!("cancel-instance-{profile_id}"))
+                                .px_3()
+                                .py_2()
+                                .rounded(px(8.))
+                                .bg(rgb(palette.control))
+                                .text_color(rgb(palette.muted))
+                                .hover(|style| style.bg(rgb(palette.hover)))
+                                .accessibility_label(cancel_label.clone())
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(cancel_label.clone()).build(window, cx)
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if this.instances.cancel_install(profile_id) {
+                                        cx.notify();
+                                    }
+                                }))
+                                .child(IconName::CircleX),
+                        )
+                    })
                     .child(
                         UiButton::new(format!("open-instance-folder-{profile_id}"))
                             .px_3()
@@ -3234,16 +3289,7 @@ impl LauncherApp {
         let checking = self.instances.profiles().iter().any(|profile| {
             target.is_none_or(|id| profile.id == id) && self.mods.installed.is_loading(profile.id)
         });
-        let busy = target.is_some_and(|id| {
-            matches!(
-                self.instances.runtime(&id),
-                InstanceRuntime::Installing { .. }
-                    | InstanceRuntime::DownloadingMod { .. }
-                    | InstanceRuntime::Launching
-                    | InstanceRuntime::Running { .. }
-                    | InstanceRuntime::Removing
-            )
-        });
+        let busy = target.is_some_and(|id| self.instances.runtime(&id).is_busy());
         let already_installed = target.is_some() && installed.is_some();
         let download_project = project.clone();
         div()
@@ -4740,6 +4786,82 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
+}
+
+fn format_speed(bytes_per_second: f64) -> String {
+    const KIB: f64 = 1024.;
+    const MIB: f64 = KIB * KIB;
+    if bytes_per_second >= MIB {
+        format!("{bytes_per_second:.1} MiB/s")
+    } else if bytes_per_second >= KIB {
+        format!("{bytes_per_second:.0} KiB/s")
+    } else {
+        format!("{bytes_per_second:.0} B/s")
+    }
+}
+
+/// Maps vendor install stage names to localized labels.
+fn stage_label(stage: &str, locale: Locale) -> &str {
+    match stage {
+        "Queued" => locale.text("В очереди", "Queued"),
+        "ResolveVersion" => locale.text("Получение метаданных версии", "Fetching version metadata"),
+        "DownloadLibraries" => locale.text(
+            "Скачивание клиента и библиотек",
+            "Downloading client and libraries",
+        ),
+        "DownloadAssets" => locale.text("Скачивание ресурсов игры", "Downloading game assets"),
+        "ExtractNatives" => locale.text(
+            "Распаковка natives-библиотек",
+            "Extracting native libraries",
+        ),
+        "LoaderInstall" => locale.text("Установка загрузчика", "Installing mod loader"),
+        "InstallRuntime" => locale.text("Установка Java", "Installing Java"),
+        "Verify" => locale.text("Проверка файлов", "Verifying files"),
+        other => other,
+    }
+}
+
+/// Builds the slim progress bar shown while an install downloads.
+///
+/// Byte totals drive the bar when the plan declared file sizes; otherwise the
+/// finished file count stands in. Plans without either stay without a bar.
+fn install_progress_view(
+    received: u64,
+    total_bytes: Option<u64>,
+    speed_bps: f64,
+    completed_tasks: usize,
+    total_tasks: Option<usize>,
+    palette: Palette,
+    _locale: Locale,
+) -> Option<AnyElement> {
+    let fraction = if let Some(total) = total_bytes.filter(|total| *total > 0) {
+        Some(received as f64 / total as f64)
+    } else {
+        total_tasks
+            .filter(|total| *total > 0)
+            .map(|total| completed_tasks as f64 / total as f64)
+    }?;
+    let fraction = fraction.clamp(0., 1.);
+
+    Some(
+        div()
+            .h(px(4.))
+            .w_full()
+            .rounded(px(2.))
+            .bg(rgb(palette.control))
+            .overflow_hidden()
+            .child(
+                div()
+                    .h_full()
+                    .w(relative(fraction as f32))
+                    .bg(rgb(if speed_bps > 0. {
+                        palette.accent
+                    } else {
+                        palette.muted
+                    })),
+            )
+            .into_any_element(),
+    )
 }
 
 fn mod_icon_placeholder(

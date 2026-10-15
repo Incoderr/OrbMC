@@ -1,3 +1,4 @@
+pub mod java;
 pub mod manifest_cache;
 pub mod mod_files;
 pub mod process;

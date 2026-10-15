@@ -42,6 +42,27 @@ pub enum ProgressEvent {
         /// Stage that started.
         stage: InstallStage,
     },
+    /// A download plan started.
+    ///
+    /// `tasks` counts the files that are expected to download; files already
+    /// present with valid checksums are skipped without being counted.
+    PlanStarted {
+        /// Number of tasks the plan will execute.
+        tasks: usize,
+        /// Summed expected size of the pending tasks, when every task declared
+        /// its size.
+        total_bytes: Option<u64>,
+    },
+    /// Aggregated byte progress across the tasks of a plan.
+    ///
+    /// Emitted periodically while downloads run; `downloaded` counts the
+    /// bytes received since the plan started.
+    PlanProgress {
+        /// Bytes downloaded so far in this plan.
+        downloaded: u64,
+        /// Same total as reported by [`ProgressEvent::PlanStarted`].
+        total_bytes: Option<u64>,
+    },
     /// A concrete file task started.
     TaskStarted {
         /// Human-readable task label.
@@ -60,15 +81,6 @@ pub enum ProgressEvent {
     TaskFinished {
         /// Human-readable task label.
         label: String,
-    },
-    /// Bytes were received for a task.
-    BytesReceived {
-        /// Human-readable task label.
-        label: String,
-        /// Bytes received so far.
-        received: u64,
-        /// Total byte count when the server reported it.
-        total: Option<u64>,
     },
 }
 

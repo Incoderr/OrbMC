@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     core::version::VersionJson,
-    net::download::{execute_plan, Checksum, DownloadPlan, DownloadTask},
-    progress::ProgressReporter,
+    net::control::DownloadControl,
+    net::download::{execute_plan_controlled, Checksum, DownloadPlan, DownloadTask},
+    progress::{InstallStage, ProgressEvent, ProgressReporter},
     Result,
 };
 
@@ -68,6 +69,7 @@ pub fn plan_asset_index_download(
         url: asset_index.url.clone(),
         destination: asset_index_path(minecraft_dir, &asset_index.id),
         checksum: Some(Checksum::Sha1(asset_index.sha1.clone())),
+        size: Some(asset_index.size.unsigned_abs()),
         label: format!("assets index {}", asset_index.id),
     }])
 }
@@ -90,6 +92,7 @@ pub fn plan_asset_object_downloads_from_index(
                     url: format!("{RESOURCES_BASE}/{prefix}/{}", object.hash),
                     destination: asset_object_path(minecraft_dir, &object.hash),
                     checksum: Some(Checksum::Sha1(object.hash.clone())),
+                    size: Some(object.size.unsigned_abs()),
                     label: format!("asset {name}"),
                 }
             })
@@ -107,12 +110,13 @@ pub fn install_assets(
     version: &VersionJson,
     minecraft_dir: impl AsRef<Path>,
     reporter: &mut dyn ProgressReporter,
+    control: &DownloadControl,
 ) -> Result<()> {
     let minecraft_dir = minecraft_dir.as_ref();
     let index_plan = DownloadPlan {
         tasks: plan_asset_index_download(version, minecraft_dir)?,
     };
-    execute_plan(&index_plan, reporter)?;
+    execute_plan_controlled(&index_plan, reporter, control)?;
 
     let Some(asset_index) = &version.asset_index else {
         return Ok(());
@@ -120,5 +124,8 @@ pub fn install_assets(
     let index_path = asset_index_path(minecraft_dir, &asset_index.id);
     let index: AssetIndexJson = serde_json::from_slice(&fs::read(index_path)?)?;
     let object_plan = plan_asset_object_downloads_from_index(&index, minecraft_dir);
-    execute_plan(&object_plan, reporter)
+    reporter.report(ProgressEvent::StageStarted {
+        stage: InstallStage::DownloadAssets,
+    });
+    execute_plan_controlled(&object_plan, reporter, control)
 }
