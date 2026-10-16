@@ -5,11 +5,15 @@ use std::{
     rc::Rc,
 };
 
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::{
     App, AppContext as _, Context, Empty, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels, PlatformInput, Point, Render,
-    StatefulInteractiveElement as _, Styled as _, TestAppContext, Window, div, point, px, rgb,
+    StatefulInteractiveElement as _, Styled as _, TestAppContext, Window, div, img, point, px, rgb,
 };
+use gpui_kit::{ObjectFit, StyledImage as _};
 
 struct OverlayRoot;
 
@@ -121,4 +125,96 @@ fn click(window: &mut Window, position: Point<Pixels>, cx: &mut App) {
         }),
         cx,
     );
+}
+
+struct AccountHeadRoot {
+    head: std::sync::Arc<gpui_kit::RenderImage>,
+}
+
+impl Render for AccountHeadRoot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let head = self.head.clone();
+        div()
+            .v_flex()
+            .w(px(252.))
+            .h(px(400.))
+            .px_3()
+            .py_5()
+            .gap_6()
+            .child(div().h(px(1.)).w_full().bg(rgb(0x444444)))
+            .child(
+                gpui_kit::component::button::Button::new("account-switcher")
+                    .ghost()
+                    .w_full()
+                    .h_11()
+                    .child(
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .w(px(32.))
+                                    .h(px(32.))
+                                    .flex_shrink_0()
+                                    .rounded(px(8.))
+                                    .overflow_hidden()
+                                    .bg(rgb(0x222222))
+                                    .child(
+                                        img(head)
+                                            .size_full()
+                                            .object_fit(ObjectFit::Cover)
+                                            .debug_selector(|| "account-head-img".to_string()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(div().text_size(px(13.)).truncate().child("Player"))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .truncate()
+                                            .child("Offline mode (no account)"),
+                                    ),
+                            ),
+                    )
+                    .dropdown_menu(move |menu, _, _| {
+                        menu.label("Аккаунт".to_owned()).item(
+                            gpui_kit::component::menu::PopupMenuItem::new(
+                                "Офлайн-режим (без аккаунта)",
+                            )
+                            .checked(true)
+                            .disabled(true),
+                        )
+                    }),
+            )
+    }
+}
+
+#[gpui_kit::test]
+fn account_head_image_keeps_square_bounds(cx: &mut TestAppContext) {
+    let head = std::sync::Arc::new(gpui_kit::RenderImage::new([image::Frame::new(
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 180, 144, 255])),
+    )]));
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::component::set_locale("ru-RU");
+        gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
+    });
+
+    let (_, cx) = cx.add_window_view(|_, _| AccountHeadRoot { head });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let bounds = cx
+        .debug_bounds("account-head-img")
+        .expect("head image bounds");
+    assert_eq!(bounds.size.width, px(32.));
+    assert_eq!(bounds.size.height, px(32.));
 }

@@ -28,3 +28,4 @@ windows = { version = "0.61.3", features = ["Win32_UI_Shell", "Win32_UI_WindowsA
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

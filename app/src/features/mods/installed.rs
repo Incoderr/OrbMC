@@ -80,6 +80,45 @@ pub fn record_install(directory: &Path, project: String, filename: &str) -> Resu
         .map_err(|e| e.to_string())
 }
 
+/// Deletes every mod file linked to `project` from the mods directory and
+/// removes their records from the manifest. Files that fail to delete (for
+/// example, a running game keeps a lock on them) stay in the manifest.
+/// Returns the removed filenames.
+pub fn uninstall(directory: &Path, project: &str) -> Result<Vec<String>, String> {
+    let records: Vec<Record> =
+        mod_files::read_json(&directory.join(MANIFEST)).map_err(|e| e.to_string())?;
+    let mut removed = Vec::new();
+    let mut kept = Vec::with_capacity(records.len());
+    let mut failure = None;
+    for record in records {
+        if !record.projects.iter().any(|id| id == project) {
+            kept.push(record);
+            continue;
+        }
+        match std::fs::remove_file(directory.join(&record.filename)) {
+            Ok(()) => removed.push(record.filename),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                removed.push(record.filename)
+            }
+            Err(error) => {
+                if failure.is_none() {
+                    failure = Some(format!("Не удалось удалить файл {}", record.filename));
+                }
+                tracing::warn!(filename = %record.filename, %error, "failed to delete mod file");
+                kept.push(record);
+            }
+        }
+    }
+    if !removed.is_empty() {
+        profile_store::write_json_atomically(&directory.join(MANIFEST), &kept)
+            .map_err(|e| e.to_string())?;
+    }
+    match failure {
+        Some(message) => Err(message),
+        None => Ok(removed),
+    }
+}
+
 pub fn scan(directory: &Path, api_key: Option<&str>) -> Inventory {
     let files = match mod_files::scan(directory) {
         Ok(files) => files,
@@ -279,5 +318,23 @@ mod tests {
         state.finish(first, old, Inventory::default());
         assert!(state.contains(first, "modrinth:example"));
         assert!(!state.contains(second, "modrinth:example"));
+    }
+
+    #[test]
+    fn uninstall_removes_only_the_requested_project() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("a.jar"), b"a").unwrap();
+        std::fs::write(directory.path().join("b.jar"), b"b").unwrap();
+        record_install(directory.path(), "modrinth:a".into(), "a.jar").unwrap();
+        record_install(directory.path(), "modrinth:b".into(), "b.jar").unwrap();
+
+        let removed = uninstall(directory.path(), "modrinth:a").unwrap();
+
+        assert_eq!(removed, ["a.jar"]);
+        assert!(!directory.path().join("a.jar").exists());
+        assert!(directory.path().join("b.jar").exists());
+        let records: Vec<Record> = mod_files::read_json(&directory.path().join(MANIFEST)).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].projects, ["modrinth:b"]);
     }
 }

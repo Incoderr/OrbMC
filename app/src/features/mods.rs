@@ -351,6 +351,15 @@ pub const SAMPLE_MODS: &[ModSample] = &[
     },
 ];
 
+/// Sidebar filter sections that can be collapsed in the catalog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FilterSection {
+    Version,
+    Loader,
+    Categories,
+    Source,
+}
+
 #[derive(Debug, Default)]
 pub struct ModsState {
     pub installed: installed::InstalledState,
@@ -368,6 +377,8 @@ pub struct ModsState {
     request_id: u64,
     compatibility_filter: Option<ModCompatibilityFilter>,
     target_profile: Option<uuid::Uuid>,
+    /// Sidebar filter sections currently collapsed.
+    collapsed_filters: std::collections::HashSet<FilterSection>,
     game_version_filter: Option<String>,
     loader_filter: Option<ModLoaderFilter>,
     selected_mod: Option<catalog::ModProject>,
@@ -381,6 +392,21 @@ pub struct ModsState {
 impl ModsState {
     pub fn kind(&self) -> ProjectKind {
         self.kind
+    }
+
+    /// Whether a filters sidebar section is currently collapsed.
+    pub fn filters_collapsed(&self, section: FilterSection) -> bool {
+        self.collapsed_filters.contains(&section)
+    }
+
+    /// Toggles a filters sidebar section; returns the new collapsed state.
+    pub fn toggle_filters(&mut self, section: FilterSection) -> bool {
+        if !self.collapsed_filters.remove(&section) {
+            self.collapsed_filters.insert(section);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn set_kind(&mut self, kind: ProjectKind) {

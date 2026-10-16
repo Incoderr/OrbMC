@@ -15,6 +15,9 @@ use uuid::Uuid;
 use super::java::{self, JavaRequirement};
 use super::versions::LoaderChoice;
 
+/// Username used for offline launches until a real account is connected.
+pub const OFFLINE_PLAYER_NAME: &str = "Player";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InstanceProfile {
     pub id: Uuid,
@@ -793,7 +796,7 @@ pub fn launch_profile(
     let java_executable = resolution.executable.clone();
     let java_probe = resolution.probe;
 
-    let account = Account::offline("Player");
+    let account = Account::offline(OFFLINE_PLAYER_NAME);
     if let Err(message) =
         super::skins::local::prepare(&profile, &game_directory, account.username())
     {

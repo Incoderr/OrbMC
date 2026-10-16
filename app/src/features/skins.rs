@@ -1,4 +1,5 @@
 use gpui_kit::RenderImage;
+use image::GenericImageView as _;
 use serde::{Deserialize, Serialize};
 use std::{io::Cursor, path::Path, sync::Arc};
 use uuid::Uuid;
@@ -46,6 +47,8 @@ pub struct SkinState {
     thumbnails: std::collections::HashMap<Uuid, Arc<RenderImage>>,
     textures: std::collections::HashMap<Uuid, Arc<image::RgbaImage>>,
     selected_preview: Option<(Uuid, i16, SkinModel, Arc<RenderImage>)>,
+    /// Face crop of the selected skin for the sidebar account block.
+    head: Option<Arc<RenderImage>>,
 }
 
 impl SkinState {
@@ -69,6 +72,7 @@ impl SkinState {
                 state.error = Some(format!("Не удалось прочитать список скинов: {error}"))
             }
         }
+        state.refresh_head();
         state
     }
 
@@ -117,6 +121,7 @@ impl SkinState {
             self.index.selected = previous;
             return Err(error);
         }
+        self.refresh_head();
         Ok(())
     }
 
@@ -174,6 +179,7 @@ impl SkinState {
             let _ = crate::platform::skin_store::remove(id);
             return Err(error);
         }
+        self.refresh_head();
         Ok(id)
     }
 
@@ -190,6 +196,7 @@ impl SkinState {
             self.index = before;
             return Err(error);
         }
+        self.refresh_head();
         crate::platform::skin_store::remove(id)
             .map_err(|error| format!("Скин удалён из списка, но файл не удалось очистить: {error}"))
     }
@@ -220,6 +227,26 @@ impl SkinState {
 
     pub fn texture(&self, id: Uuid) -> Option<Arc<image::RgbaImage>> {
         self.textures.get(&id).cloned()
+    }
+
+    /// Face crop of the selected skin for the sidebar account block.
+    pub fn head(&self) -> Option<Arc<RenderImage>> {
+        self.head.clone()
+    }
+
+    /// Recrops the sidebar face from the currently selected skin. Falls back to
+    /// `None` when no skin is selected or its texture cannot be decoded.
+    fn refresh_head(&mut self) {
+        self.head = self.selected_skin().and_then(|skin| {
+            let texture = match self.textures.get(&skin.id) {
+                Some(texture) => texture.clone(),
+                None => {
+                    let bytes = crate::platform::skin_store::load(skin.id).ok()?;
+                    Arc::new(decode_skin(&bytes).ok()?)
+                }
+            };
+            Some(render_head_image(&texture))
+        });
     }
 
     pub fn cache_thumbnail(
@@ -339,6 +366,27 @@ pub fn decode_skin(bytes: &[u8]) -> Result<image::RgbaImage, String> {
     image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
         .map(|image| image.into_rgba8())
         .map_err(|error| format!("PNG не удалось декодировать: {error}"))
+}
+
+/// Renders the selected skin's face (front head layer plus hat layer) as a
+/// square image for the sidebar account block.
+fn render_head_image(texture: &image::RgbaImage) -> Arc<RenderImage> {
+    let scale = (texture.width() / 64).max(1);
+    let face = texture
+        .view(8 * scale, 8 * scale, 8 * scale, 8 * scale)
+        .to_image();
+    let hat = texture
+        .view(40 * scale, 8 * scale, 8 * scale, 8 * scale)
+        .to_image();
+    let mut head = image::RgbaImage::new(8 * scale, 8 * scale);
+    image::imageops::overlay(&mut head, &face, 0, 0);
+    image::imageops::overlay(&mut head, &hat, 0, 0);
+    let mut face_image =
+        image::imageops::resize(&head, 64, 64, image::imageops::FilterType::Nearest);
+    for pixel in face_image.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Arc::new(RenderImage::new([image::Frame::new(face_image)]))
 }
 
 #[cfg(test)]
