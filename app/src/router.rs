@@ -5,6 +5,8 @@ use gpui_kit::assets::IconName;
 pub enum Page {
     Home,
     Instances,
+    /// Detail page of one build: installed mods with enable/disable.
+    InstanceDetails(uuid::Uuid),
     Modpacks,
     Mods,
     ResourcePacks,
@@ -29,6 +31,7 @@ impl Page {
         match self {
             Self::Home => locale.text("Главная", "Home"),
             Self::Instances => locale.text("Сборки", "Builds"),
+            Self::InstanceDetails(_) => locale.text("Сборка", "Build"),
             Self::Modpacks => locale.text("Модпаки", "Modpacks"),
             Self::Mods => locale.text("Моды", "Mods"),
             Self::ResourcePacks => locale.text("Текстурпаки", "Texture packs"),
@@ -53,6 +56,7 @@ impl Page {
         match self {
             Self::Home => "nav-home",
             Self::Instances => "nav-instances",
+            Self::InstanceDetails(_) => "nav-instance-details",
             Self::Modpacks => "nav-modpacks",
             Self::Mods => "nav-mods",
             Self::ResourcePacks => "nav-resource-packs",
@@ -67,6 +71,7 @@ impl Page {
         match self {
             Self::Home => IconName::House,
             Self::Instances => IconName::Box,
+            Self::InstanceDetails(_) => IconName::Box,
             Self::Modpacks => IconName::Blocks,
             Self::Mods => IconName::Puzzle,
             Self::ResourcePacks => IconName::Paintbrush,

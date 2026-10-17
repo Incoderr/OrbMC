@@ -1,4 +1,4 @@
-use std::{io::Write, path::PathBuf, sync::Arc, time::Duration};
+use std::{io::Write, path::Path, path::PathBuf, sync::Arc, time::Duration};
 
 use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Request};
 use serde::Deserialize;
@@ -14,7 +14,7 @@ const CURSEFORGE_SEARCH_URL: &str = "https://api.curseforge.com/v1/mods/search";
 const CURSEFORGE_MOD_DESCRIPTION_URL: &str = "https://api.curseforge.com/v1/mods";
 const CURSEFORGE_MINECRAFT_GAME_ID: u32 = 432;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ModSource {
     #[default]
     All,
@@ -33,7 +33,7 @@ impl ModSource {
         }
     }
 
-    fn api_name(self) -> &'static str {
+    pub fn api_name(self) -> &'static str {
         match self {
             Self::All => "All",
             Self::Modrinth => "Modrinth",
@@ -72,6 +72,11 @@ pub struct CatalogProviderError {
     pub provider: ModSource,
     pub message: String,
     pub missing_api_key: bool,
+    /// The provider has no file of this project for the requested game
+    /// version / loader. For a dependency, that usually means the dependency
+    /// simply does not target this build (e.g. Fabric API listed for a
+    /// NeoForge mod) and must be skipped, not reported as a failure.
+    pub no_compatible_file: bool,
 }
 
 #[derive(Debug, Default)]
@@ -104,6 +109,7 @@ pub async fn fetch_project_description(
                         "Set the CURSEFORGE_API_KEY environment variable to enable CurseForge."
                             .into(),
                     missing_api_key: true,
+                    no_compatible_file: false,
                 });
             };
             let project_id = project_id
@@ -257,6 +263,23 @@ pub async fn search_catalog(
     result
 }
 
+/// Result of installing one mod: the requested project plus any required
+/// dependencies that were resolved and downloaded alongside it.
+#[derive(Clone, Debug)]
+pub struct ModInstallOutcome {
+    /// Project ids (provider-prefixed) that were downloaded, main mod first.
+    pub installed: Vec<String>,
+    /// File names written to the mods directory, main mod first.
+    pub files: Vec<String>,
+}
+
+/// Downloads `project_id` and every required dependency that is compatible
+/// with the build.
+///
+/// Dependency traversal is breadth-first and cycle-safe. Projects already
+/// recorded in the mods manifest are skipped, so installing an already
+/// present mod only refreshes nothing and downloading the same dependency
+/// twice never happens.
 pub async fn install_compatible_mod(
     client: Arc<dyn HttpClient>,
     project_id: String,
@@ -264,7 +287,7 @@ pub async fn install_compatible_mod(
     compatibility: ModCompatibilityFilter,
     curseforge_api_key: Option<String>,
     mods_directory: PathBuf,
-) -> Result<String, CatalogProviderError> {
+) -> Result<ModInstallOutcome, CatalogProviderError> {
     if compatibility.loader == super::ModLoaderFilter::Vanilla {
         return Err(provider_error(
             source,
@@ -273,15 +296,65 @@ pub async fn install_compatible_mod(
         ));
     }
 
-    let file = fetch_compatible_mod_file(
-        client.clone(),
-        &project_id,
-        source,
-        &compatibility,
-        curseforge_api_key,
-    )
-    .await?;
+    let mut files = Vec::new();
+    let mut installed = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    let main_project = project_id.clone();
+    queue.push_back(project_id);
 
+    while let Some(project) = queue.pop_front() {
+        if !visited.insert(project.clone()) {
+            continue;
+        }
+        let is_main = project == main_project;
+        // Skip anything the build already has; dependencies of an installed
+        // project were settled when that project was installed.
+        if super::installed::recorded_projects(&mods_directory).contains(&project) {
+            continue;
+        }
+        let (file, dependencies) = match resolve_compatible_mod_file(
+            client.clone(),
+            &project,
+            source,
+            &compatibility,
+            curseforge_api_key.as_deref(),
+        )
+        .await
+        {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                // Providers list dependencies from every variant of a mod:
+                // a Fabric-only dep (e.g. Fabric API of a NeoForge mod) has
+                // no file for this build, which is not an error.
+                if !is_main && error.no_compatible_file {
+                    tracing::info!(
+                        dependency = %project,
+                        "dependency has no file for this build; treating it as not required here"
+                    );
+                    continue;
+                }
+                return Err(error);
+            }
+        };
+        let filename = download_mod_file(client.clone(), &project, file, &mods_directory).await?;
+        installed.push(project);
+        files.push(filename);
+        queue.extend(dependencies);
+    }
+
+    Ok(ModInstallOutcome { installed, files })
+}
+
+/// Validates and stores one resolved mod file, then records the project in
+/// the mods manifest.
+async fn download_mod_file(
+    client: Arc<dyn HttpClient>,
+    project_id: &str,
+    file: ModDownloadFile,
+    mods_directory: &Path,
+) -> Result<String, CatalogProviderError> {
+    let source = file.source;
     if file.filename.trim().is_empty()
         || file.filename == "."
         || file.filename == ".."
@@ -318,14 +391,14 @@ pub async fn install_compatible_mod(
         ));
     }
 
-    std::fs::create_dir_all(&mods_directory).map_err(|error| {
+    std::fs::create_dir_all(mods_directory).map_err(|error| {
         provider_error(
             source,
             format!("Could not create the instance mods directory: {error}"),
         )
     })?;
     let destination = mods_directory.join(&file.filename);
-    let mut temporary = tempfile::NamedTempFile::new_in(&mods_directory).map_err(|error| {
+    let mut temporary = tempfile::NamedTempFile::new_in(mods_directory).map_err(|error| {
         provider_error(
             source,
             format!("Could not create a temporary mod file: {error}"),
@@ -373,25 +446,26 @@ pub async fn install_compatible_mod(
         )
     })?;
 
-    super::installed::record_install(&mods_directory, project_id, &file.filename).map_err(
-        |error| {
+    super::installed::record_install(mods_directory, project_id.to_owned(), &file.filename)
+        .map_err(|error| {
             provider_error(
                 source,
                 format!("Mod saved, but could not record installation: {error}"),
             )
-        },
-    )?;
+        })?;
 
     Ok(file.filename)
 }
 
-async fn fetch_compatible_mod_file(
+/// Resolves the best compatible file of `project_id` plus its required
+/// dependency projects.
+async fn resolve_compatible_mod_file(
     client: Arc<dyn HttpClient>,
     project_id: &str,
     source: ModSource,
     compatibility: &ModCompatibilityFilter,
-    curseforge_api_key: Option<String>,
-) -> Result<ModDownloadFile, CatalogProviderError> {
+    curseforge_api_key: Option<&str>,
+) -> Result<(ModDownloadFile, Vec<String>), CatalogProviderError> {
     match source {
         ModSource::Modrinth => {
             let id = project_id.strip_prefix("modrinth:").unwrap_or(project_id);
@@ -442,12 +516,17 @@ async fn fetch_compatible_mod_file(
                 .find(|file| file.primary)
                 .or_else(|| version.files.first())
                 .ok_or_else(|| provider_error(source, "The mod version has no files.".into()))?;
-            Ok(ModDownloadFile {
-                url: file.url.clone(),
-                filename: file.filename.clone(),
-                sha1: file.hashes.get("sha1").cloned(),
-                size: Some(file.size),
-            })
+            let required_dependencies = modrinth_required_dependencies(&version);
+            Ok((
+                ModDownloadFile {
+                    source,
+                    url: file.url.clone(),
+                    filename: file.filename.clone(),
+                    sha1: file.hashes.get("sha1").cloned(),
+                    size: Some(file.size),
+                },
+                required_dependencies,
+            ))
         }
         ModSource::CurseForge => {
             let api_key = curseforge_api_key
@@ -458,6 +537,7 @@ async fn fetch_compatible_mod_file(
                         "Set the CURSEFORGE_API_KEY environment variable to enable CurseForge."
                             .into(),
                     missing_api_key: true,
+                    no_compatible_file: false,
                 })?;
             let id = project_id
                 .strip_prefix("curseforge:")
@@ -471,7 +551,7 @@ async fn fetch_compatible_mod_file(
                 encode_query_component(&compatibility.game_version),
                 compatibility.loader.curseforge_id(),
             );
-            let body = request_body(client.clone(), &url, Some(&api_key), source).await?;
+            let body = request_body(client.clone(), &url, Some(api_key), source).await?;
             let response: CurseForgeFilesResponse =
                 serde_json::from_str(&body).map_err(|error| {
                     provider_error(source, format!("Invalid mod files response: {error}"))
@@ -493,6 +573,7 @@ async fn fetch_compatible_mod_file(
                     )
                 })?;
             let file = compatible_files.swap_remove(file_index);
+            let required_dependencies = curseforge_required_dependencies(&file);
             let download_url = match file.download_url.filter(|url| !url.trim().is_empty()) {
                 Some(url) => url,
                 None => {
@@ -500,7 +581,7 @@ async fn fetch_compatible_mod_file(
                         "{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}/files/{}/download-url",
                         file.id
                     );
-                    let body = request_body(client, &url, Some(&api_key), source).await?;
+                    let body = request_body(client, &url, Some(api_key), source).await?;
                     let response: CurseForgeDownloadUrlResponse = serde_json::from_str(&body)
                         .map_err(|error| {
                             provider_error(
@@ -516,12 +597,16 @@ async fn fetch_compatible_mod_file(
                 .into_iter()
                 .find(|hash| hash.algo == 1)
                 .map(|hash| hash.value);
-            Ok(ModDownloadFile {
-                url: download_url,
-                filename: file.file_name,
-                sha1,
-                size: Some(file.file_length),
-            })
+            Ok((
+                ModDownloadFile {
+                    source,
+                    url: download_url,
+                    filename: file.file_name,
+                    sha1,
+                    size: Some(file.file_length),
+                },
+                required_dependencies,
+            ))
         }
         ModSource::All => Err(provider_error(
             source,
@@ -580,17 +665,46 @@ fn no_compatible_mod_file(
     game_version: &str,
     loader: super::ModLoaderFilter,
 ) -> CatalogProviderError {
-    provider_error(
-        source,
-        format!(
-            "No compatible file found for Minecraft {game_version} with {}.",
-            loader.title(Locale::En)
-        ),
-    )
+    CatalogProviderError {
+        no_compatible_file: true,
+        ..provider_error(
+            source,
+            format!(
+                "No compatible file found for Minecraft {game_version} with {}.",
+                loader.title(Locale::En)
+            ),
+        )
+    }
+}
+
+/// Hard dependencies of a Modrinth version as prefixed project ids.
+fn modrinth_required_dependencies(version: &ModrinthVersion) -> Vec<String> {
+    version
+        .dependencies
+        .iter()
+        .filter_map(|dependency| {
+            if dependency.dependency_type == "required" {
+                dependency.project_id.clone()
+            } else {
+                None
+            }
+        })
+        .map(|project| format!("modrinth:{project}"))
+        .collect()
+}
+
+/// Hard dependency mods of a CurseForge file as prefixed project ids.
+fn curseforge_required_dependencies(file: &CurseForgeFile) -> Vec<String> {
+    file.dependencies
+        .iter()
+        .filter(|dependency| dependency.relation_type == CURSEFORGE_RELATION_REQUIRED)
+        .map(|dependency| format!("curseforge:{}", dependency.mod_id))
+        .collect()
 }
 
 #[derive(Clone, Debug)]
 struct ModDownloadFile {
+    source: ModSource,
     url: String,
     filename: String,
     sha1: Option<String>,
@@ -700,6 +814,7 @@ async fn search_curseforge(
             provider: ModSource::CurseForge,
             message: "Set the CURSEFORGE_API_KEY environment variable to enable CurseForge.".into(),
             missing_api_key: true,
+            no_compatible_file: false,
         });
     };
 
@@ -827,6 +942,7 @@ fn provider_error(provider: ModSource, message: String) -> CatalogProviderError 
         provider,
         message,
         missing_api_key: false,
+        no_compatible_file: false,
     }
 }
 
@@ -871,6 +987,18 @@ struct ModrinthVersion {
     loaders: Vec<String>,
     #[serde(default)]
     files: Vec<ModrinthVersionFile>,
+    #[serde(default)]
+    dependencies: Vec<ModrinthDependency>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ModrinthDependency {
+    /// `project_id` is missing for `version_id`-linked dependencies; those are
+    /// skipped during dependency resolution.
+    project_id: Option<String>,
+    #[serde(default)]
+    dependency_type: String,
 }
 
 #[derive(Deserialize)]
@@ -906,7 +1034,19 @@ struct CurseForgeFile {
     file_length: u64,
     #[serde(default)]
     game_versions: Vec<String>,
+    #[serde(default)]
+    dependencies: Vec<CurseForgeFileDependency>,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CurseForgeFileDependency {
+    mod_id: u64,
+    relation_type: u32,
+}
+
+/// CurseForge relation types: 3 is "required".
+const CURSEFORGE_RELATION_REQUIRED: u32 = 3;
 
 #[derive(Deserialize)]
 struct CurseForgeFileHash {
@@ -1200,7 +1340,11 @@ fn date_label(date: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CurseForgeMod, ModProject, ModSource, ModrinthHit, encode_query_component};
+    use super::{
+        CurseForgeFile, CurseForgeMod, ModProject, ModSource, ModrinthHit, ModrinthVersion,
+        curseforge_required_dependencies, encode_query_component, modrinth_required_dependencies,
+        no_compatible_mod_file, provider_error,
+    };
     use crate::features::mods::{ModCategory, ProjectKind};
 
     #[test]
@@ -1295,5 +1439,69 @@ mod tests {
             encode_query_component("Sodium + 日本語"),
             "Sodium%20%2B%20%E6%97%A5%E6%9C%AC%E8%AA%9E"
         );
+    }
+
+    #[test]
+    fn modrinth_required_dependencies_keep_only_required_projects() {
+        let version: ModrinthVersion = serde_json::from_str(
+            r#"{
+                "game_versions": ["1.20.1"],
+                "loaders": ["fabric"],
+                "files": [{"url": "https://cdn.modrinth.com/a.jar", "filename": "a.jar", "primary": true, "size": 10}],
+                "dependencies": [
+                    {"project_id": "A", "dependency_type": "required"},
+                    {"project_id": "B", "dependency_type": "optional"},
+                    {"project_id": "C", "dependency_type": "embedded"},
+                    {"dependency_type": "required", "version_id": "v1"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            modrinth_required_dependencies(&version),
+            vec!["modrinth:A".to_owned()]
+        );
+    }
+
+    #[test]
+    fn curseforge_required_dependencies_keep_only_relation_3() {
+        let file: CurseForgeFile = serde_json::from_str(
+            r#"{
+                "id": 1,
+                "fileName": "a.jar",
+                "downloadUrl": "https://mediafilez.forgecdn.com/files/a.jar",
+                "dependencies": [
+                    {"modId": 11, "relationType": 3},
+                    {"modId": 12, "relationType": 2},
+                    {"modId": 13, "relationType": 1}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            curseforge_required_dependencies(&file),
+            vec!["curseforge:11".to_owned()]
+        );
+    }
+
+    #[test]
+    fn versions_without_dependencies_resolve_to_nothing() {
+        let version: ModrinthVersion = serde_json::from_str(
+            r#"{"files": [{"url": "https://cdn.modrinth.com/a.jar", "filename": "a.jar", "primary": true, "size": 10}]}"#,
+        )
+        .unwrap();
+        assert!(modrinth_required_dependencies(&version).is_empty());
+    }
+
+    #[test]
+    fn only_a_missing_compatible_file_counts_as_skippable_for_dependencies() {
+        let skippable = no_compatible_mod_file(
+            ModSource::Modrinth,
+            "26.3",
+            super::super::ModLoaderFilter::NeoForge,
+        );
+        assert!(skippable.no_compatible_file);
+        let hard_error = provider_error(ModSource::Modrinth, "network glitch".into());
+        assert!(!hard_error.no_compatible_file);
     }
 }

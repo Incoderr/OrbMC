@@ -5970,6 +5970,7 @@ dependencies = [
  "rs-mc-launcher-core",
  "serde",
  "serde_json",
+ "sha1 0.10.7",
  "tempfile",
  "tracing",
  "uuid",

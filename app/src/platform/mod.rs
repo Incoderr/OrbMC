@@ -4,6 +4,7 @@ pub mod mod_files;
 pub mod process;
 pub mod profile_store;
 pub mod skin_store;
+pub mod translation_cache;
 #[cfg(target_os = "windows")]
 pub mod tray;
 pub mod worlds;

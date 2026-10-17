@@ -24,6 +24,7 @@ quick-xml = { version = "0.41", features = ["serialize"] }
 tracing = "0.1"
 mc-launcher-core = "0.1.2"
 uuid = { version = "1.23.1", features = ["serde", "v4"] }
+sha1 = "0.10"
 tempfile = "3"
 
 [profile.dev.package]

@@ -3,6 +3,7 @@ use gpui_kit::assets::IconName;
 
 pub mod catalog;
 pub mod installed;
+pub mod translation;
 
 #[derive(Clone, Debug, Default)]
 pub struct ModSearchFilters {
@@ -360,6 +361,32 @@ pub enum FilterSection {
     Source,
 }
 
+/// Identifies one description translation in the cache maps.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TranslationKey {
+    pub project_id: String,
+    pub source: catalog::ModSource,
+    pub locale: Locale,
+}
+
+impl TranslationKey {
+    pub fn for_project(project: &catalog::ModProject, locale: Locale) -> Self {
+        Self {
+            project_id: project.id.clone(),
+            source: project.source,
+            locale,
+        }
+    }
+}
+
+/// Per-item state of one card description translation. Missing key means
+/// "original text" — cards never share global flags.
+#[derive(Clone, Debug)]
+pub enum TranslationState {
+    Fetching,
+    Translated(String),
+}
+
 #[derive(Debug, Default)]
 pub struct ModsState {
     pub installed: installed::InstalledState,
@@ -387,6 +414,9 @@ pub struct ModsState {
     description_error: Option<String>,
     description_request_id: u64,
     detail_tab: ModDetailTab,
+    translations: std::collections::HashMap<TranslationKey, TranslationState>,
+    /// Mods installed into each build, for the build details page.
+    build_mods: std::collections::HashMap<uuid::Uuid, Vec<installed::InstalledModEntry>>,
 }
 
 impl ModsState {
@@ -616,6 +646,85 @@ impl ModsState {
 
     pub fn set_detail_tab(&mut self, tab: ModDetailTab) {
         self.detail_tab = tab;
+    }
+
+    /// Mods installed into the given build for the build details page.
+    pub fn build_mods(&self, profile: uuid::Uuid) -> &[installed::InstalledModEntry] {
+        self.build_mods
+            .get(&profile)
+            .map(|entries| entries.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn set_build_mods(
+        &mut self,
+        profile: uuid::Uuid,
+        entries: Vec<installed::InstalledModEntry>,
+    ) {
+        self.build_mods.insert(profile, entries);
+    }
+
+    /// The description shown in the card and its tooltip.
+    ///
+    /// Returns the translation when it is ready, otherwise the original
+    /// provider text. English never requests a translation.
+    pub fn card_description(&self, project: &catalog::ModProject, locale: Locale) -> String {
+        if locale != Locale::Ru {
+            return project.description.clone();
+        }
+        match self
+            .translations
+            .get(&TranslationKey::for_project(project, locale))
+        {
+            Some(TranslationState::Translated(text)) => text.clone(),
+            _ => project.description.clone(),
+        }
+    }
+
+    /// Marks the description as being fetched. Returns `false` when the
+    /// translation already exists or is already in flight; then no new
+    /// request is needed.
+    pub fn begin_translation(&mut self, project: &catalog::ModProject, locale: Locale) -> bool {
+        if locale == Locale::En || project.description.trim().is_empty() {
+            return false;
+        }
+        let key = TranslationKey::for_project(project, locale);
+        match self.translations.get(&key) {
+            Some(TranslationState::Translated(_)) => false,
+            Some(TranslationState::Fetching) => false,
+            None => {
+                self.translations.insert(key, TranslationState::Fetching);
+                true
+            }
+        }
+    }
+
+    /// Stores the result of one background translation job.
+    pub fn finish_translation(
+        &mut self,
+        project: &catalog::ModProject,
+        locale: Locale,
+        result: Result<String, translation::TranslationError>,
+    ) -> bool {
+        let key = TranslationKey::for_project(project, locale);
+        if !matches!(
+            self.translations.get(&key),
+            Some(TranslationState::Fetching)
+        ) {
+            return false;
+        }
+        match result {
+            Ok(text) => {
+                self.translations
+                    .insert(key, TranslationState::Translated(text));
+            }
+            // On failure keep the original text on the card: fall back by
+            // simply forgetting the attempt so a later search can retry.
+            Err(_) => {
+                self.translations.remove(&key);
+            }
+        }
+        true
     }
 
     pub fn is_loading(&self) -> bool {

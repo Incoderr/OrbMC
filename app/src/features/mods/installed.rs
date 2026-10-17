@@ -7,6 +7,9 @@ use std::{
 };
 
 const MANIFEST: &str = ".launcher-mods.json";
+/// Suffix that turns a mod file invisible to the game and the scanner while
+/// keeping it on disk (`mod.jar` → `mod.jar.disabled`).
+const DISABLED_SUFFIX: &str = ".disabled";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Record {
@@ -26,6 +29,8 @@ pub struct InstalledState {
     inventories: HashMap<uuid::Uuid, Inventory>,
     generations: HashMap<uuid::Uuid, u64>,
     loading: HashSet<uuid::Uuid>,
+    /// Builds (project ids) whose download is currently in flight.
+    pending: HashSet<String>,
 }
 
 impl InstalledState {
@@ -33,6 +38,17 @@ impl InstalledState {
         self.inventories
             .get(&profile)
             .is_some_and(|inventory| inventory.projects.contains(project))
+    }
+    /// Marks a build's download as in flight. Only the item that owns the
+    /// download changes appearance; other list items stay untouched.
+    pub fn begin_install(&mut self, project: &str) {
+        self.pending.insert(project.to_owned());
+    }
+    pub fn finish_install(&mut self, project: &str) {
+        self.pending.remove(project);
+    }
+    pub fn is_installing(&self, project: &str) -> bool {
+        self.pending.contains(project)
     }
     pub fn begin(&mut self, profile: uuid::Uuid) -> u64 {
         let generation = self.generations.entry(profile).or_default();
@@ -65,6 +81,80 @@ impl InstalledState {
     }
 }
 
+/// Every project id ever recorded for the build. Used to skip already
+/// installed projects when resolving dependencies.
+pub fn recorded_projects(directory: &Path) -> HashSet<String> {
+    match mod_files::read_json::<Vec<Record>>(&directory.join(MANIFEST)) {
+        Ok(records) => records
+            .into_iter()
+            .flat_map(|record| record.projects)
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "failed to read mod installation records");
+            HashSet::new()
+        }
+    }
+}
+
+/// One recorded mod file of a build, as shown on the build page.
+#[derive(Clone, Debug)]
+pub struct InstalledModEntry {
+    pub filename: String,
+    pub projects: Vec<String>,
+    pub disabled: bool,
+}
+
+/// Wrapper of `record.projects` for listing entries.
+fn read_records(directory: &Path) -> Vec<Record> {
+    mod_files::read_json(&directory.join(MANIFEST)).unwrap_or_default()
+}
+
+/// Lists every recorded mod file plus its on-disk enabled state.
+pub fn list_entries(directory: &Path) -> Vec<InstalledModEntry> {
+    let mut entries: Vec<InstalledModEntry> = read_records(directory)
+        .into_iter()
+        .map(|record| InstalledModEntry {
+            filename: record.filename.clone(),
+            projects: record.projects,
+            disabled: is_disabled(directory, &record.filename),
+        })
+        .collect();
+    entries.sort_by(|left, right| left.filename.cmp(&right.filename));
+    entries.dedup_by(|left, right| left.filename == right.filename);
+    entries
+}
+
+/// Whether `filename` currently sits with the `.disabled` suffix on disk.
+fn is_disabled(directory: &Path, filename: &str) -> bool {
+    !directory.join(filename).exists()
+        && directory
+            .join(format!("{filename}{DISABLED_SUFFIX}"))
+            .exists()
+}
+
+/// Enables or disables a mod file by renaming it on disk. The game and the
+/// library scanner only pick up plain `.jar` files, so a `.jar.disabled`
+/// file stays available for re-enabling without any download.
+pub fn set_disabled(directory: &Path, filename: &str, disabled: bool) -> Result<(), String> {
+    let enabled_path = directory.join(filename);
+    let disabled_path = directory.join(format!("{filename}{DISABLED_SUFFIX}"));
+    let (from, to) = if disabled {
+        (enabled_path, disabled_path)
+    } else {
+        (disabled_path, enabled_path)
+    };
+    if from == to || !from.exists() {
+        return Err(format!("Мод файл не найден: {filename}"));
+    }
+    if to.exists() {
+        return Err(format!("Целевой файл уже существует: {}", to.display()));
+    }
+    std::fs::rename(&from, &to).map_err(|error| {
+        tracing::warn!(%filename, %error, "failed to toggle mod file state");
+        format!("Не удалось изменить состояние мода: {error}")
+    })
+}
+
 pub fn record_install(directory: &Path, project: String, filename: &str) -> Result<(), String> {
     let sha1 = mc_launcher_core::io::hash::sha1_file(directory.join(filename))
         .map_err(|e| e.to_string())?;
@@ -95,11 +185,8 @@ pub fn uninstall(directory: &Path, project: &str) -> Result<Vec<String>, String>
             kept.push(record);
             continue;
         }
-        match std::fs::remove_file(directory.join(&record.filename)) {
+        match remove_record_file(directory, &record.filename) {
             Ok(()) => removed.push(record.filename),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                removed.push(record.filename)
-            }
             Err(error) => {
                 if failure.is_none() {
                     failure = Some(format!("Не удалось удалить файл {}", record.filename));
@@ -119,6 +206,41 @@ pub fn uninstall(directory: &Path, project: &str) -> Result<Vec<String>, String>
     }
 }
 
+/// Filenames of disabled mods in `directory`, without the `.disabled` suffix.
+fn disabled_filenames(directory: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if !entry.file_type().ok()?.is_file() {
+                return None;
+            }
+            let name = entry.file_name().to_str()?.to_owned();
+            name.strip_suffix(DISABLED_SUFFIX).map(str::to_owned)
+        })
+        .collect()
+}
+
+/// Deletes the file of a record: a plain `.jar` or its `.disabled` variant.
+/// A missing file is not an error — the record just stops referring to it.
+fn remove_record_file(directory: &Path, filename: &str) -> Result<(), String> {
+    let plain = directory.join(filename);
+    match std::fs::remove_file(&plain) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let disabled = directory.join(format!("{filename}{DISABLED_SUFFIX}"));
+            match std::fs::remove_file(&disabled) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.to_string()),
+            }
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 pub fn scan(directory: &Path, api_key: Option<&str>) -> Inventory {
     let files = match mod_files::scan(directory) {
         Ok(files) => files,
@@ -129,7 +251,7 @@ pub fn scan(directory: &Path, api_key: Option<&str>) -> Inventory {
             };
         }
     };
-    if files.is_empty() {
+    if files.is_empty() && disabled_filenames(directory).is_empty() {
         return Inventory::default();
     }
     let mut warnings = Vec::new();
@@ -141,6 +263,16 @@ pub fn scan(directory: &Path, api_key: Option<&str>) -> Inventory {
         }
     };
     let mut records = reconcile(&files, &cached);
+    // Disabled mods are skipped by the scanner but stay installed: keep
+    // their records so re-enabling restores a fully identified file.
+    let disabled = disabled_filenames(directory);
+    for record in &cached {
+        if disabled.iter().any(|filename| filename == &record.filename)
+            && !records.iter().any(|kept| kept.filename == record.filename)
+        {
+            records.push(record.clone());
+        }
+    }
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent("rs-mc-launcher/0.1")
@@ -318,6 +450,64 @@ mod tests {
         state.finish(first, old, Inventory::default());
         assert!(state.contains(first, "modrinth:example"));
         assert!(!state.contains(second, "modrinth:example"));
+    }
+
+    #[test]
+    fn disabling_keeps_the_record_and_reenabling_restores_the_file() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("a.jar"), b"a").unwrap();
+        record_install(directory.path(), "modrinth:a".into(), "a.jar").unwrap();
+
+        // Disable: the .jar disappears, the .disabled variant appears and
+        // list_entries reports the mod as disabled.
+        set_disabled(directory.path(), "a.jar", true).unwrap();
+        assert!(!directory.path().join("a.jar").exists());
+        assert!(directory.path().join("a.jar.disabled").exists());
+        let entries = list_entries(directory.path());
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].disabled);
+        assert_eq!(entries[0].projects, vec!["modrinth:a".to_owned()]);
+
+        // A scan must keep the record of the disabled mod: the project stays
+        // "installed" (disabled is a file state, not an uninstall).
+        let scanned = scan(directory.path(), None);
+        assert!(scanned.projects.contains("modrinth:a"));
+        let records: Vec<Record> = mod_files::read_json(&directory.path().join(MANIFEST)).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].filename, "a.jar");
+        assert_eq!(records[0].projects, vec!["modrinth:a".to_owned()]);
+
+        // Re-enable: the file is back with the original name.
+        set_disabled(directory.path(), "a.jar", false).unwrap();
+        assert!(directory.path().join("a.jar").exists());
+        let scanned = scan(directory.path(), None);
+        assert!(scanned.projects.contains("modrinth:a"));
+    }
+
+    #[test]
+    fn uninstall_removes_both_enabled_and_disabled_variants() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("a.jar"), b"a").unwrap();
+        record_install(directory.path(), "modrinth:a".into(), "a.jar").unwrap();
+        set_disabled(directory.path(), "a.jar", true).unwrap();
+        uninstall(directory.path(), "modrinth:a").unwrap();
+        assert!(!directory.path().join("a.jar.disabled").exists());
+        let records: Vec<Record> = mod_files::read_json(&directory.path().join(MANIFEST)).unwrap();
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn recorded_projects_lists_every_project_of_a_build() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("a.jar"), b"a").unwrap();
+        record_install(directory.path(), "modrinth:a".into(), "a.jar").unwrap();
+        std::fs::write(directory.path().join("b.jar"), b"b").unwrap();
+        record_install(directory.path(), "curseforge:2".into(), "b.jar").unwrap();
+        let projects = recorded_projects(directory.path());
+        assert_eq!(
+            projects,
+            HashSet::from(["modrinth:a".to_owned(), "curseforge:2".to_owned()])
+        );
     }
 
     #[test]

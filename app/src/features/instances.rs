@@ -18,6 +18,14 @@ use super::versions::LoaderChoice;
 /// Username used for offline launches until a real account is connected.
 pub const OFFLINE_PLAYER_NAME: &str = "Player";
 
+/// Validates a Minecraft player name used for offline launches.
+///
+/// The vanilla rules apply: 3-16 characters, Latin letters, digits and `_`.
+pub fn is_valid_player_name(name: &str) -> bool {
+    let name = name.trim();
+    (3..=16).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InstanceProfile {
     pub id: Uuid,
@@ -731,6 +739,7 @@ pub fn launch_profile(
     profile: InstanceProfile,
     minecraft_directory: PathBuf,
     world: Option<String>,
+    player_name: String,
     events: UnboundedSender<InstanceWorkerEvent>,
 ) {
     let id = profile.id;
@@ -796,7 +805,12 @@ pub fn launch_profile(
     let java_executable = resolution.executable.clone();
     let java_probe = resolution.probe;
 
-    let account = Account::offline(OFFLINE_PLAYER_NAME);
+    let account = Account::offline(match player_name.trim() {
+        name if is_valid_player_name(name) => name.to_owned(),
+        // The persisted name is validated at save time; fall back to a
+        // sensible default if it got corrupted or dropped on disk.
+        _ => OFFLINE_PLAYER_NAME.to_owned(),
+    });
     if let Err(message) =
         super::skins::local::prepare(&profile, &game_directory, account.username())
     {
@@ -1049,5 +1063,19 @@ mod tests {
         assert_eq!(old.last_launch_order, 0);
         let state = InstancesState::from_profiles(vec![old, profile("New")]);
         assert_eq!(state.recent_profiles()[0].name, "Old");
+    }
+
+    #[test]
+    fn player_names_follow_vanilla_rules() {
+        assert!(is_valid_player_name("Player"));
+        assert!(is_valid_player_name("a_b_999"));
+        assert!(is_valid_player_name(" Steve "));
+        assert!(is_valid_player_name("abc"));
+        assert!(is_valid_player_name("0123456789abcdef"));
+        assert!(!is_valid_player_name("ab"));
+        assert!(!is_valid_player_name("0123456789abcdefg"));
+        assert!(!is_valid_player_name(""));
+        assert!(!is_valid_player_name("И в нике"));
+        assert!(!is_valid_player_name("with-dash"));
     }
 }

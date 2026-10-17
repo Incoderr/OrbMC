@@ -1,4 +1,8 @@
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+use std::path::PathBuf;
+
+use super::instances::{OFFLINE_PLAYER_NAME, is_valid_player_name};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Locale {
     #[default]
     Ru,
@@ -110,6 +114,7 @@ pub struct SettingsState {
     accent: AccentColor,
     hide_to_tray: bool,
     download_directory: PathBuf,
+    offline_player: String,
 }
 
 impl SettingsState {
@@ -133,6 +138,11 @@ impl SettingsState {
         &self.download_directory
     }
 
+    /// Player name used for offline launches (launcher has no account yet).
+    pub fn offline_player(&self) -> &str {
+        &self.offline_player
+    }
+
     pub fn set_locale(&mut self, locale: Locale) {
         self.locale = locale;
     }
@@ -152,5 +162,16 @@ impl SettingsState {
     pub fn set_download_directory(&mut self, path: PathBuf) {
         self.download_directory = path;
     }
+
+    /// Stores a validated offline player name; invalid names keep the default.
+    pub fn set_offline_player(&mut self, name: String) {
+        if is_valid_player_name(&name) {
+            self.offline_player = name.trim().to_owned();
+        }
+    }
+
+    /// Fallback used when the saved name is missing or invalid.
+    pub fn reset_offline_player(&mut self) {
+        self.offline_player = OFFLINE_PLAYER_NAME.to_owned();
+    }
 }
-use std::path::PathBuf;
