@@ -1,3 +1,4 @@
+use super::theme::Palette;
 use super::*;
 use crate::features::skins::SkinModel;
 use gpui_kit::component::switch::Switch;
