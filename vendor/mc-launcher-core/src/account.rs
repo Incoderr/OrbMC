@@ -5,6 +5,7 @@
 //! Microsoft authentication is handled in [`crate::auth::microsoft_account`],
 //! while offline launches can use [`Account::offline`].
 
+use md5::{Digest, Md5};
 use uuid::Uuid;
 
 /// A Minecraft account identity used by launch argument substitution.
@@ -14,7 +15,7 @@ use uuid::Uuid;
 /// profile and access token returned by the Microsoft login flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Account {
-    /// An offline account with a generated UUID and no access token.
+    /// An offline account with a Minecraft-compatible UUID and no access token.
     Offline {
         /// Display name passed to the game as `${auth_player_name}`.
         username: String,
@@ -33,7 +34,8 @@ pub enum Account {
 }
 
 impl Account {
-    /// Creates an offline account with a random UUID.
+    /// Creates an offline account with the stable UUID Minecraft derives from
+    /// the player's name in offline mode.
     ///
     /// Offline accounts return an empty string from [`Account::access_token`].
     ///
@@ -47,9 +49,10 @@ impl Account {
     /// assert_eq!(account.access_token(), "");
     /// ```
     pub fn offline(username: impl Into<String>) -> Self {
+        let username = username.into();
         Self::Offline {
-            username: username.into(),
-            uuid: Uuid::new_v4().to_string(),
+            uuid: offline_uuid(&username),
+            username,
         }
     }
 
@@ -74,4 +77,13 @@ impl Account {
             Self::Microsoft { access_token, .. } => access_token,
         }
     }
+}
+
+/// Matches Java's `UUID.nameUUIDFromBytes` for Minecraft offline player names.
+fn offline_uuid(username: &str) -> String {
+    let name = format!("OfflinePlayer:{username}");
+    let mut bytes: [u8; 16] = Md5::digest(name.as_bytes()).into();
+    bytes[6] = (bytes[6] & 0x0f) | 0x30;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes).to_string()
 }

@@ -142,6 +142,9 @@ features = ["derive"]
 [dependencies.serde_json]
 version = "1.0.150"
 
+[dependencies.md-5]
+version = "0.10.6"
+
 [dependencies.serde_urlencoded]
 version = "0.7.1"
 

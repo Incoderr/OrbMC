@@ -67,6 +67,158 @@ pub struct ModProject {
     pub page_url: String,
 }
 
+/// One gallery screenshot of a project as returned by the provider.
+#[derive(Clone, Debug)]
+pub struct ModGalleryImage {
+    /// Full-size image URL.
+    pub url: String,
+    /// Smaller variant for previews; empty when the provider has none.
+    pub thumbnail: String,
+    pub title: String,
+    pub description: String,
+}
+
+/// Detailed project metadata loaded from the provider's project endpoint
+/// (Modrinth `/project/{id}` or CurseForge `/v1/mods/{id}`).
+#[derive(Clone, Debug, Default)]
+pub struct ModProjectInfo {
+    pub downloads: Option<u64>,
+    pub likes: Option<u64>,
+    pub license: Option<String>,
+    pub date_created: Option<String>,
+    pub source_url: Option<String>,
+    pub issues_url: Option<String>,
+    pub wiki_url: Option<String>,
+    pub discord_url: Option<String>,
+    pub gallery: Vec<ModGalleryImage>,
+}
+
+pub async fn fetch_project_info(
+    client: Arc<dyn HttpClient>,
+    project_id: String,
+    source: ModSource,
+    curseforge_api_key: Option<String>,
+) -> Result<ModProjectInfo, CatalogProviderError> {
+    match source {
+        ModSource::Modrinth => {
+            let id = project_id.strip_prefix("modrinth:").unwrap_or(&project_id);
+            let url = format!(
+                "https://api.modrinth.com/v2/project/{}",
+                encode_query_component(id),
+            );
+            let body = request_body(client, &url, None, source).await?;
+            let project: ModrinthProject = serde_json::from_str(&body).map_err(|error| {
+                provider_error(source, format!("Invalid project details response: {error}"))
+            })?;
+            Ok(build_modrinth_info(project))
+        }
+        ModSource::CurseForge => {
+            let api_key = curseforge_api_key
+                .filter(|key| !key.trim().is_empty())
+                .ok_or_else(|| CatalogProviderError {
+                    provider: source,
+                    message:
+                        "Set the CURSEFORGE_API_KEY environment variable to enable CurseForge."
+                            .to_owned(),
+                    missing_api_key: true,
+                    no_compatible_file: false,
+                })?;
+            let id = project_id
+                .strip_prefix("curseforge:")
+                .unwrap_or(&project_id)
+                .parse::<u64>()
+                .map_err(|error| {
+                    provider_error(source, format!("Invalid CurseForge project id: {error}"))
+                })?;
+            let url = format!("{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}");
+            let body = request_body(client, &url, Some(&api_key), source).await?;
+            let response: CurseForgeProjectResponse =
+                serde_json::from_str(&body).map_err(|error| {
+                    provider_error(source, format!("Invalid project details response: {error}"))
+                })?;
+            let project = response.data.ok_or_else(|| {
+                provider_error(source, "The provider returned no project details.".into())
+            })?;
+            Ok(build_curseforge_info(project))
+        }
+        ModSource::All => Err(provider_error(
+            source,
+            "A catalog provider is required to load project details.".into(),
+        )),
+    }
+}
+
+fn flat_link(
+    links: Option<&CurseForgeLinks>,
+    field: impl Fn(&CurseForgeLinks) -> Option<String>,
+) -> Option<String> {
+    links.and_then(field).filter(|url| !url.trim().is_empty())
+}
+
+/// Maps a Modrinth project payload into displayable project details.
+fn build_modrinth_info(project: ModrinthProject) -> ModProjectInfo {
+    ModProjectInfo {
+        downloads: Some(project.downloads),
+        likes: Some(project.follows),
+        license: project.license.and_then(|license| {
+            let label = license
+                .name
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or(license.id);
+            (!label.trim().is_empty()).then_some(label)
+        }),
+        date_created: iso_date(&project.date_created),
+        source_url: project.source_url.filter(|url| !url.trim().is_empty()),
+        issues_url: project.issues_url.filter(|url| !url.trim().is_empty()),
+        wiki_url: project.wiki_url.filter(|url| !url.trim().is_empty()),
+        discord_url: project.discord_url.filter(|url| !url.trim().is_empty()),
+        gallery: project
+            .gallery
+            .into_iter()
+            .map(|image| ModGalleryImage {
+                // Modrinth serves no separate thumbnail URL for gallery
+                // entries, so preview with the full image.
+                thumbnail: image.url.clone(),
+                url: image.url,
+                title: image.title,
+                description: image.description,
+            })
+            .collect(),
+    }
+}
+
+/// Maps a CurseForge project payload into displayable project details.
+fn build_curseforge_info(project: CurseForgeProject) -> ModProjectInfo {
+    let links = project.links;
+    ModProjectInfo {
+        downloads: Some(project.download_count),
+        likes: Some(project.thumbs_up_count),
+        license: None,
+        date_created: iso_date(&project.date_created),
+        source_url: flat_link(links.as_ref(), |l| l.source_url.clone()),
+        issues_url: flat_link(links.as_ref(), |l| l.issues_url.clone()),
+        wiki_url: flat_link(links.as_ref(), |l| l.wiki_url.clone()),
+        discord_url: None,
+        gallery: project
+            .screenshots
+            .into_iter()
+            .map(|image| ModGalleryImage {
+                thumbnail: image.thumbnail_url.unwrap_or_else(|| image.url.clone()),
+                url: image.url,
+                title: image.title,
+                description: image.description,
+            })
+            .filter(|image| !image.url.trim().is_empty())
+            .collect(),
+    }
+}
+
+/// Keeps just the calendar day of an ISO date-time string.
+fn iso_date(date: &Option<String>) -> Option<String> {
+    date.as_deref()
+        .and_then(|date| date.get(..10).map(str::to_owned))
+}
+
 #[derive(Clone, Debug)]
 pub struct CatalogProviderError {
     pub provider: ModSource,
@@ -974,6 +1126,88 @@ struct ModrinthProjectDescription {
 }
 
 #[derive(Deserialize)]
+struct ModrinthProject {
+    #[serde(default)]
+    downloads: u64,
+    #[serde(default)]
+    follows: u64,
+    #[serde(default)]
+    date_created: Option<String>,
+    #[serde(default)]
+    source_url: Option<String>,
+    #[serde(default)]
+    issues_url: Option<String>,
+    #[serde(default)]
+    wiki_url: Option<String>,
+    #[serde(default)]
+    discord_url: Option<String>,
+    #[serde(default)]
+    license: Option<ModrinthLicense>,
+    #[serde(default)]
+    gallery: Vec<ModrinthGalleryImage>,
+}
+
+#[derive(Deserialize)]
+struct ModrinthLicense {
+    /// Some licenses have a SPDX id instead of a proper name.
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ModrinthGalleryImage {
+    url: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CurseForgeProjectResponse {
+    #[serde(default)]
+    data: Option<CurseForgeProject>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CurseForgeProject {
+    #[serde(default)]
+    download_count: u64,
+    #[serde(default)]
+    thumbs_up_count: u64,
+    #[serde(default)]
+    date_created: Option<String>,
+    #[serde(default)]
+    links: Option<CurseForgeLinks>,
+    #[serde(default)]
+    screenshots: Vec<CurseForgeScreenshot>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CurseForgeLinks {
+    source_url: Option<String>,
+    issues_url: Option<String>,
+    wiki_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CurseForgeScreenshot {
+    url: String,
+    #[serde(default)]
+    thumbnail_url: Option<String>,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Deserialize)]
 struct CurseForgeDescriptionResponse {
     #[serde(default)]
     data: String,
@@ -1320,7 +1554,7 @@ fn icon_for_categories(categories: &[ModCategory]) -> IconName {
     }
 }
 
-fn format_count(count: u64) -> String {
+pub(crate) fn format_count(count: u64) -> String {
     if count >= 1_000_000_000 {
         format!("{:.1}B", count as f64 / 1_000_000_000.0)
     } else if count >= 1_000_000 {
@@ -1503,5 +1737,91 @@ mod tests {
         assert!(skippable.no_compatible_file);
         let hard_error = provider_error(ModSource::Modrinth, "network glitch".into());
         assert!(!hard_error.no_compatible_file);
+    }
+
+    #[test]
+    fn maps_modrinth_project_details_with_gallery_and_license() {
+        let project: super::ModrinthProject = serde_json::from_str(
+            r#"{
+                "downloads": 1200000,
+                "follows": 25000,
+                "date_created": "2021-05-19T12:00:00.000Z",
+                "license": {"id": "lgpl-3.0"},
+                "source_url": "https://github.com/example/mod",
+                "issues_url": "https://github.com/example/mod/issues",
+                "gallery": [
+                    {"url": "https://cdn.modrinth.com/a.png", "title": "Title", "description": "Desc"},
+                    {"url": "https://cdn.modrinth.com/b.png"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let info = fetch_project_info_from_modrinth(project);
+        assert_eq!(info.downloads, Some(1_200_000));
+        assert_eq!(info.likes, Some(25_000));
+        assert_eq!(info.date_created.as_deref(), Some("2021-05-19"));
+        assert_eq!(info.license.as_deref(), Some("lgpl-3.0"));
+        assert_eq!(
+            info.source_url.as_deref(),
+            Some("https://github.com/example/mod")
+        );
+        assert_eq!(info.gallery.len(), 2);
+        assert_eq!(info.gallery[0].title, "Title");
+        assert_eq!(info.gallery[1].title, "");
+        assert_eq!(info.gallery[1].thumbnail, info.gallery[1].url);
+    }
+
+    #[test]
+    fn maps_curseforge_project_details_with_screenshots_and_links() {
+        let response: super::CurseForgeProjectResponse = serde_json::from_str(
+            r#"{
+                "data": {
+                    "downloadCount": 9876,
+                    "thumbsUpCount": 31,
+                    "dateCreated": "2019-01-02T03:04:05Z",
+                    "links": {
+                        "sourceUrl": "https://github.com/example/mod",
+                        "issuesUrl": ""
+                    },
+                    "screenshots": [
+                        {"url": "https://media.forgecdn.net/a.png", "thumbnailUrl": "https://media.forgecdn.net/a_t.png", "title": "Shot"},
+                        {"url": ""}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let project = response.data.unwrap();
+        assert_eq!(project.download_count, 9876);
+        assert_eq!(
+            project.date_created.as_deref(),
+            Some("2019-01-02T03:04:05Z")
+        );
+        let info = fetch_project_info_from_curseforge(project);
+        assert_eq!(info.likes, Some(31));
+        assert_eq!(info.date_created.as_deref(), Some("2019-01-02"));
+        assert_eq!(
+            info.source_url.as_deref(),
+            Some("https://github.com/example/mod")
+        );
+        // Empty links and screenshots are filtered out.
+        assert!(info.issues_url.is_none());
+        assert_eq!(info.gallery.len(), 1);
+        assert_eq!(
+            info.gallery[0].thumbnail,
+            "https://media.forgecdn.net/a_t.png"
+        );
+    }
+
+    fn fetch_project_info_from_modrinth(project: super::ModrinthProject) -> super::ModProjectInfo {
+        super::build_modrinth_info(project)
+    }
+
+    fn fetch_project_info_from_curseforge(
+        project: super::CurseForgeProject,
+    ) -> super::ModProjectInfo {
+        super::build_curseforge_info(project)
     }
 }

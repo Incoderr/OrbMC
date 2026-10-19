@@ -859,7 +859,7 @@ impl LauncherApp {
             .accessibility_label(locale.text("Открыть описание проекта", "Open project details"))
             .on_click(cx.listener(move |this, _, window, cx| {
                 let request_id = this.mods.select_mod(selected_project.clone());
-                this.load_mod_description(
+                this.load_mod_details(
                     selected_project.id.clone(),
                     selected_project.source,
                     request_id,

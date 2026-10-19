@@ -11,8 +11,8 @@ use crate::{
     features::mods::{
         ModCompatibilityFilter, ModsState,
         catalog::{
-            ModProject, ModSource, fetch_project_description, install_compatible_mod,
-            search_catalog,
+            ModProject, ModSource, fetch_project_description, fetch_project_info,
+            install_compatible_mod, search_catalog,
         },
         installed, translation,
     },
@@ -518,7 +518,7 @@ impl LauncherApp {
         .detach();
     }
 
-    fn load_mod_description(
+    fn load_mod_details(
         &self,
         project_id: String,
         source: ModSource,
@@ -528,10 +528,20 @@ impl LauncherApp {
         let client = cx.http_client();
         let curseforge_api_key = std::env::var("CURSEFORGE_API_KEY").ok();
         cx.spawn(async move |this, cx| {
-            let result =
-                fetch_project_description(client, project_id, source, curseforge_api_key).await;
+            let (description, info) = futures::join!(
+                fetch_project_description(
+                    client.clone(),
+                    project_id.clone(),
+                    source,
+                    curseforge_api_key.clone(),
+                ),
+                fetch_project_info(client, project_id, source, curseforge_api_key),
+            );
             let _ = this.update(cx, |this, cx| {
-                if this.mods.finish_description_load(request_id, result) {
+                if this.mods.finish_description_load(request_id, description) {
+                    cx.notify();
+                }
+                if this.mods.finish_info_load(request_id, info) {
                     cx.notify();
                 }
             });

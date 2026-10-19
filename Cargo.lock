@@ -4083,6 +4083,7 @@ version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "md-5",
  "once_cell",
  "rand 0.9.5",
  "regex",

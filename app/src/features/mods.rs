@@ -413,6 +413,11 @@ pub struct ModsState {
     description_loading: bool,
     description_error: Option<String>,
     description_request_id: u64,
+    /// Provider project details fetched after selecting a mod (downloads,
+    /// likes, links, release dates, gallery screenshots).
+    project_info: Option<catalog::ModProjectInfo>,
+    info_loading: bool,
+    info_error: Option<String>,
     detail_tab: ModDetailTab,
     translations: std::collections::HashMap<TranslationKey, TranslationState>,
     /// Mods installed into each build, for the build details page.
@@ -587,6 +592,9 @@ impl ModsState {
         self.full_description = None;
         self.description_loading = true;
         self.description_error = None;
+        self.project_info = None;
+        self.info_loading = true;
+        self.info_error = None;
         self.detail_tab = ModDetailTab::Description;
         self.description_request_id
     }
@@ -601,6 +609,9 @@ impl ModsState {
         self.full_description = None;
         self.description_loading = false;
         self.description_error = None;
+        self.project_info = None;
+        self.info_loading = false;
+        self.info_error = None;
     }
 
     pub fn full_description(&self) -> Option<&str> {
@@ -635,6 +646,42 @@ impl ModsState {
             }
             Err(error) => {
                 self.description_error = Some(error.message);
+            }
+        }
+        true
+    }
+
+    /// The loaded provider details of the selected project, if any.
+    pub fn project_info(&self) -> Option<&catalog::ModProjectInfo> {
+        self.project_info.as_ref()
+    }
+
+    pub fn info_loading(&self) -> bool {
+        self.info_loading
+    }
+
+    pub fn info_error(&self) -> Option<&str> {
+        self.info_error.as_deref()
+    }
+
+    /// Stores the result of one background project details request.
+    pub fn finish_info_load(
+        &mut self,
+        request_id: u64,
+        result: Result<catalog::ModProjectInfo, catalog::CatalogProviderError>,
+    ) -> bool {
+        if self.description_request_id != request_id || self.selected_mod.is_none() {
+            return false;
+        }
+
+        self.info_loading = false;
+        match result {
+            Ok(info) => {
+                self.project_info = Some(info);
+                self.info_error = None;
+            }
+            Err(error) => {
+                self.info_error = Some(error.message);
             }
         }
         true

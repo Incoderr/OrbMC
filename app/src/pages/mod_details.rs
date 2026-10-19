@@ -225,6 +225,13 @@ impl LauncherApp {
             .collect();
 
         let tab_content = self.mod_detail_content(sample, active_tab, palette, locale, cx);
+        let license = self
+            .mods
+            .project_info()
+            .and_then(|info| info.license.clone())
+            .filter(|license| !license.trim().is_empty())
+            .unwrap_or_else(|| sample.license.clone());
+
         let metadata = div()
             .v_flex()
             .w(px(204.))
@@ -250,7 +257,7 @@ impl LauncherApp {
             .child(detail_meta_row(
                 IconName::FileText,
                 locale.text("Лицензия", "License"),
-                sample.license.clone(),
+                license.clone(),
                 palette,
             ))
             .child(detail_meta_row(
@@ -264,7 +271,62 @@ impl LauncherApp {
                 locale.text("Загрузчики", "Loaders"),
                 sample.loaders.clone(),
                 palette,
-            ));
+            ))
+            // Real provider details once the project endpoint responds.
+            .when_some(self.mods.project_info().cloned(), |this, info| {
+                this.child(detail_meta_row(
+                    IconName::Calendar,
+                    locale.text("Дата создания", "Created"),
+                    info.date_created.clone().unwrap_or_else(|| "—".into()),
+                    palette,
+                ))
+                .child(detail_meta_row(
+                    IconName::ArrowDown,
+                    locale.text("Загрузок", "Downloads"),
+                    info.downloads
+                        .map(format_count)
+                        .unwrap_or_else(|| "—".into()),
+                    palette,
+                ))
+                .child(detail_meta_row(
+                    IconName::Heart,
+                    locale.text("Оценок", "Follows"),
+                    info.likes.map(format_count).unwrap_or_else(|| "—".into()),
+                    palette,
+                ))
+                .children(info.source_url.map(|url| {
+                    detail_link_button(
+                        format!("source-link-{}", sample.id),
+                        locale.text("Исходники", "Source code"),
+                        url,
+                        palette,
+                    )
+                }))
+                .children(info.issues_url.map(|url| {
+                    detail_link_button(
+                        format!("issues-link-{}", sample.id),
+                        locale.text("Сообщения об ошибках", "Issue tracker"),
+                        url,
+                        palette,
+                    )
+                }))
+                .children(info.wiki_url.map(|url| {
+                    detail_link_button(
+                        format!("wiki-link-{}", sample.id),
+                        locale.text("Вики", "Wiki"),
+                        url,
+                        palette,
+                    )
+                }))
+                .children(info.discord_url.map(|url| {
+                    detail_link_button(
+                        format!("discord-link-{}", sample.id),
+                        locale.text("Discord", "Discord"),
+                        url,
+                        palette,
+                    )
+                }))
+            });
 
         div()
             .v_flex()
@@ -475,53 +537,74 @@ impl LauncherApp {
         palette: Palette,
         locale: Locale,
     ) -> AnyElement {
-        let thumbnails: Vec<_> = [0, 1, 2]
-            .into_iter()
-            .map(|index| {
-                if index == 0 && sample.image_url.is_some() {
-                    mod_project_thumbnail(sample, px(112.))
-                } else {
-                    div()
-                        .flex_1()
-                        .h(px(112.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(8.))
-                        .bg(rgb(if index == 0 {
-                            sample.icon_background
-                        } else if index == 1 {
-                            palette.selected
-                        } else {
-                            palette.control
-                        }))
-                        .text_color(rgb(if index == 0 {
-                            sample.icon_foreground
-                        } else {
-                            palette.accent
-                        }))
-                        .text_size(px(30.))
-                        .child(sample.icon)
-                        .into_any_element()
-                }
-            })
-            .collect();
+        let header = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .text_size(px(14.))
+            .font_weight(FontWeight::BOLD)
+            .text_color(rgb(palette.foreground))
+            .child(IconName::GalleryVerticalEnd)
+            .child(locale.text("Скриншоты", "Screenshots"));
+
+        let gallery: Vec<ModGalleryImage> = self
+            .mods
+            .project_info()
+            .map(|info| info.gallery.clone())
+            .unwrap_or_default();
+
+        let body = if self.mods.info_loading() {
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(palette.muted))
+                .child(locale.text(
+                    "Загружаем скриншоты с сервера проекта…",
+                    "Loading project screenshots…",
+                ))
+                .into_any_element()
+        } else if gallery.is_empty() {
+            match self.mods.info_error() {
+                Some(error) => div()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.muted))
+                    .child(format!(
+                        "{}{error}",
+                        locale.text("Скриншоты недоступны: ", "Screenshots unavailable: ")
+                    ))
+                    .into_any_element(),
+                None => div()
+                    .h_flex()
+                    .w_full()
+                    .items_center()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.muted))
+                    .child(locale.text(
+                        "У проекта нет скриншотов.",
+                        "This project has no screenshots.",
+                    ))
+                    .into_any_element(),
+            }
+        } else {
+            let cards: Vec<_> = gallery
+                .iter()
+                .map(|image| mod_gallery_item(image, sample, palette))
+                .collect();
+            div()
+                .id(format!("mod-gallery-{}", sample.id))
+                .h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .overflow_x_scrollbar()
+                .children(cards)
+                .into_any_element()
+        };
 
         div()
             .v_flex()
             .gap_3()
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(palette.foreground))
-                    .child(IconName::GalleryVerticalEnd)
-                    .child(locale.text("Скриншоты", "Screenshots")),
-            )
-            .child(div().h_flex().w_full().gap_2().children(thumbnails))
+            .child(header)
+            .child(body)
             .into_any_element()
     }
 
@@ -532,4 +615,88 @@ impl LauncherApp {
             .child(locale.text("Здесь пока пусто", "Nothing here yet"))
             .into_any_element()
     }
+}
+
+/// Small metadata-panel button that opens a project link.
+fn detail_link_button(
+    id: String,
+    label: impl Into<String>,
+    url: String,
+    palette: Palette,
+) -> AnyElement {
+    UiButton::new(id)
+        .w_full()
+        .px_2()
+        .py_1()
+        .rounded(px(6.))
+        .bg(rgb(palette.control))
+        .text_color(rgb(palette.foreground))
+        .hover(|style| style.bg(rgb(palette.hover)))
+        .on_click(move |_, _, cx| cx.open_url(&url))
+        .child(label.into())
+        .into_any_element()
+}
+
+/// One gallery screenshot card: cropped preview plus its title/description.
+fn mod_gallery_item(image: &ModGalleryImage, sample: &ModProject, palette: Palette) -> AnyElement {
+    // Prefer the smaller preview; fall back to the full image.
+    let preview_url = if image.thumbnail.trim().is_empty() {
+        image.url.clone()
+    } else {
+        image.thumbnail.clone()
+    };
+    let icon = sample.icon;
+    let icon_background = sample.icon_background;
+    let icon_foreground = sample.icon_foreground;
+    let caption = if image.title.trim().is_empty() {
+        image.description.trim().to_owned()
+    } else {
+        image.title.trim().to_owned()
+    };
+
+    let mut card = div()
+        .v_flex()
+        .flex_shrink_0()
+        .w(px(224.))
+        .min_w_0()
+        .rounded(px(10.))
+        .overflow_hidden()
+        .bg(rgb(palette.surface))
+        .border_1()
+        .border_color(rgb(palette.border))
+        .child(
+            div()
+                .w_full()
+                .h(px(126.))
+                .min_w_0()
+                .overflow_hidden()
+                .bg(rgb(palette.control))
+                .child(
+                    img(preview_url)
+                        .size_full()
+                        .object_fit(ObjectFit::Cover)
+                        .with_loading(move || {
+                            mod_icon_placeholder(icon, icon_background, icon_foreground, px(126.))
+                        })
+                        .with_fallback(move || {
+                            mod_icon_placeholder(icon, icon_background, icon_foreground, px(126.))
+                        }),
+                ),
+        );
+
+    if !caption.is_empty() {
+        card = card.child(
+            div()
+                .w_full()
+                .min_w_0()
+                .px_2()
+                .py_1()
+                .text_size(px(10.))
+                .text_color(rgb(palette.muted))
+                .truncate()
+                .child(caption),
+        );
+    }
+
+    card.into_any_element()
 }
