@@ -164,8 +164,9 @@ fn build_modrinth_info(project: ModrinthProject) -> ModProjectInfo {
             let label = license
                 .name
                 .filter(|name| !name.trim().is_empty())
-                .unwrap_or(license.id);
-            (!label.trim().is_empty()).then_some(label)
+                .or(license.id)
+                .filter(|label| !label.trim().is_empty());
+            label
         }),
         date_created: iso_date(&project.date_created),
         source_url: project.source_url.filter(|url| !url.trim().is_empty()),
@@ -180,8 +181,8 @@ fn build_modrinth_info(project: ModrinthProject) -> ModProjectInfo {
                 // entries, so preview with the full image.
                 thumbnail: image.url.clone(),
                 url: image.url,
-                title: image.title,
-                description: image.description,
+                title: image.title.unwrap_or_default(),
+                description: image.description.unwrap_or_default(),
             })
             .collect(),
     }
@@ -205,8 +206,8 @@ fn build_curseforge_info(project: CurseForgeProject) -> ModProjectInfo {
             .map(|image| ModGalleryImage {
                 thumbnail: image.thumbnail_url.unwrap_or_else(|| image.url.clone()),
                 url: image.url,
-                title: image.title,
-                description: image.description,
+                title: image.title.unwrap_or_default(),
+                description: image.description.unwrap_or_default(),
             })
             .filter(|image| !image.url.trim().is_empty())
             .collect(),
@@ -1151,7 +1152,7 @@ struct ModrinthProject {
 struct ModrinthLicense {
     /// Some licenses have a SPDX id instead of a proper name.
     #[serde(default)]
-    id: String,
+    id: Option<String>,
     #[serde(default)]
     name: Option<String>,
 }
@@ -1160,9 +1161,9 @@ struct ModrinthLicense {
 struct ModrinthGalleryImage {
     url: String,
     #[serde(default)]
-    title: String,
+    title: Option<String>,
     #[serde(default)]
-    description: String,
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1202,9 +1203,9 @@ struct CurseForgeScreenshot {
     #[serde(default)]
     thumbnail_url: Option<String>,
     #[serde(default)]
-    title: String,
+    title: Option<String>,
     #[serde(default)]
-    description: String,
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
