@@ -1,6 +1,6 @@
 use std::{io::Write, path::Path, path::PathBuf, sync::Arc, time::Duration};
 
-use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Request};
+use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Method, Request};
 use serde::Deserialize;
 
 use super::{
@@ -70,12 +70,15 @@ pub struct ModProject {
 /// One gallery screenshot of a project as returned by the provider.
 #[derive(Clone, Debug)]
 pub struct ModGalleryImage {
-    /// Full-size image URL.
+    /// Provider preview URL. Modrinth returns a resized variant here.
     pub url: String,
     /// Smaller variant for previews; empty when the provider has none.
     pub thumbnail: String,
     pub title: String,
     pub description: String,
+    /// Untransformed image URL for the full-size viewer, when the provider
+    /// exposes one separately from its preview URL.
+    pub full_url: Option<String>,
 }
 
 /// Detailed project metadata loaded from the provider's project endpoint
@@ -106,11 +109,13 @@ pub async fn fetch_project_info(
                 "https://api.modrinth.com/v2/project/{}",
                 encode_query_component(id),
             );
-            let body = request_body(client, &url, None, source).await?;
+            let body = request_body(client.clone(), &url, None, source).await?;
             let project: ModrinthProject = serde_json::from_str(&body).map_err(|error| {
                 provider_error(source, format!("Invalid project details response: {error}"))
             })?;
-            Ok(build_modrinth_info(project))
+            let mut info = build_modrinth_info(project);
+            probe_gallery_originals(client, &mut info.gallery).await;
+            Ok(info)
         }
         ModSource::CurseForge => {
             let api_key = curseforge_api_key
@@ -176,13 +181,17 @@ fn build_modrinth_info(project: ModrinthProject) -> ModProjectInfo {
         gallery: project
             .gallery
             .into_iter()
-            .map(|image| ModGalleryImage {
-                // Modrinth serves no separate thumbnail URL for gallery
-                // entries, so preview with the full image.
-                thumbnail: image.url.clone(),
-                url: image.url,
-                title: image.title.unwrap_or_default(),
-                description: image.description.unwrap_or_default(),
+            .map(|image| {
+                let full_url = image.raw_url.filter(|url| !url.trim().is_empty());
+                ModGalleryImage {
+                    // Modrinth's `url` is the resized gallery variant; keep
+                    // it for the thumbnail strip and use `raw_url` in the viewer.
+                    thumbnail: image.url.clone(),
+                    url: image.url,
+                    title: image.title.unwrap_or_default(),
+                    description: image.description.unwrap_or_default(),
+                    full_url,
+                }
             })
             .collect(),
     }
@@ -208,6 +217,7 @@ fn build_curseforge_info(project: CurseForgeProject) -> ModProjectInfo {
                 url: image.url,
                 title: image.title.unwrap_or_default(),
                 description: image.description.unwrap_or_default(),
+                full_url: None,
             })
             .filter(|image| !image.url.trim().is_empty())
             .collect(),
@@ -218,6 +228,75 @@ fn build_curseforge_info(project: CurseForgeProject) -> ModProjectInfo {
 fn iso_date(date: &Option<String>) -> Option<String> {
     date.as_deref()
         .and_then(|date| date.get(..10).map(str::to_owned))
+}
+
+/// Cheap existence check of a CDN URL without downloading its content.
+async fn url_exists(client: Arc<dyn HttpClient>, url: &str) -> bool {
+    if !url.starts_with("https://") {
+        return false;
+    }
+    let request = Request::builder()
+        .method(Method::HEAD)
+        .uri(url)
+        .timeout(Duration::from_secs(10))
+        .body(AsyncBody::empty())
+        .ok();
+    let Some(request) = request else {
+        return false;
+    };
+    let Ok(response) = client.send(request).await else {
+        return false;
+    };
+    response.status().is_success()
+}
+
+/// Modrinth resizes gallery uploads into `_width` variants while the
+/// untouched original keeps its own extension, so a `_350.webp` URL may
+/// be backed by a much larger `….png`/`….jpg`. Returns candidate full-size
+/// URLs, best first.
+fn modrinth_original_candidates(url: &str) -> Vec<String> {
+    let Some((path, ext)) = url.rsplit_once('.') else {
+        return Vec::new();
+    };
+    let Some((base, marker)) = path.rsplit_once('_') else {
+        return Vec::new();
+    };
+    let is_size_marker = !marker.starts_with("https:")
+        && !marker.is_empty()
+        && marker.bytes().all(|byte| byte.is_ascii_digit());
+    if !is_size_marker {
+        return Vec::new();
+    }
+    let mut candidates = vec![format!("{base}.{ext}")];
+    for extension in ["png", "jpg", "jpeg"] {
+        if extension != ext {
+            candidates.push(format!("{base}.{extension}"));
+        }
+    }
+    candidates
+}
+
+/// Replaces gallery image URLs with the largest variant the provider CDN
+/// actually serves. Every miss costs only a HEAD request, and the probing
+/// stops early on a gallery that stores no originals.
+async fn probe_gallery_originals(client: Arc<dyn HttpClient>, gallery: &mut [ModGalleryImage]) {
+    // Politeness budget: stop after this many failed probes per project.
+    let mut misses_left = 12usize;
+    for image in gallery.iter_mut() {
+        if image.full_url.is_some() {
+            continue;
+        }
+        for candidate in modrinth_original_candidates(&image.url) {
+            if url_exists(client.clone(), &candidate).await {
+                image.full_url = Some(candidate);
+                break;
+            }
+            misses_left = misses_left.saturating_sub(1);
+            if misses_left == 0 {
+                return;
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -499,26 +578,95 @@ pub async fn install_compatible_mod(
     Ok(ModInstallOutcome { installed, files })
 }
 
+/// Downloads one resource pack or shader project into the profile's standard
+/// Minecraft content folder. These project types need a game version, but no
+/// mod loader or dependency resolution.
+pub async fn install_compatible_content(
+    client: Arc<dyn HttpClient>,
+    project_id: String,
+    source: ModSource,
+    kind: ProjectKind,
+    game_version: String,
+    curseforge_api_key: Option<String>,
+    destination_directory: PathBuf,
+) -> Result<String, CatalogProviderError> {
+    let Some(directory_name) = kind.install_directory() else {
+        return Err(provider_error(
+            source,
+            "Only resource packs and shaders can be installed as profile content.".into(),
+        ));
+    };
+    let display_name = match kind {
+        ProjectKind::ResourcePack => "resource pack",
+        ProjectKind::Shader => "shader pack",
+        ProjectKind::Mod | ProjectKind::Modpack => unreachable!(),
+    };
+    let file = resolve_compatible_content_file(
+        client.clone(),
+        &project_id,
+        source,
+        kind,
+        &game_version,
+        curseforge_api_key.as_deref(),
+    )
+    .await?;
+    let destination_directory = destination_directory.join(directory_name);
+    download_file_to_directory(
+        client,
+        file,
+        &destination_directory,
+        "zip",
+        display_name,
+    )
+    .await
+}
+
 /// Validates and stores one resolved mod file, then records the project in
 /// the mods manifest.
 async fn download_mod_file(
     client: Arc<dyn HttpClient>,
     project_id: &str,
-    file: ModDownloadFile,
+    file: ProjectDownloadFile,
     mods_directory: &Path,
 ) -> Result<String, CatalogProviderError> {
     let source = file.source;
+    let filename = download_file_to_directory(client, file, mods_directory, "jar", "mod").await?;
+
+    super::installed::record_install(mods_directory, project_id.to_owned(), &filename)
+        .map_err(|error| {
+            provider_error(
+                source,
+                format!("Mod saved, but could not record installation: {error}"),
+            )
+        })?;
+
+    Ok(filename)
+}
+
+async fn download_file_to_directory(
+    client: Arc<dyn HttpClient>,
+    file: ProjectDownloadFile,
+    directory: &Path,
+    extension: &str,
+    display_name: &str,
+) -> Result<String, CatalogProviderError> {
+    let source = file.source;
+    let required_suffix = format!(".{extension}");
     if file.filename.trim().is_empty()
         || file.filename == "."
         || file.filename == ".."
         || file.filename.contains('/')
         || file.filename.contains('\\')
-        || !file.filename.to_ascii_lowercase().ends_with(".jar")
+        || file.filename.contains(':')
+        || !file
+            .filename
+            .to_ascii_lowercase()
+            .ends_with(required_suffix.as_str())
     {
         return Err(provider_error(
             source,
             format!(
-                "The provider returned an invalid mod filename: {}",
+                "The provider returned an invalid {display_name} filename: {}",
                 file.filename
             ),
         ));
@@ -527,7 +675,7 @@ async fn download_mod_file(
     if let Some(size) = file.size.filter(|size| *size > 512 * 1024 * 1024) {
         return Err(provider_error(
             source,
-            format!("The mod file is larger than the 512 MiB download limit ({size} bytes)."),
+            format!("The {display_name} is larger than the 512 MiB download limit ({size} bytes)."),
         ));
     }
 
@@ -538,41 +686,41 @@ async fn download_mod_file(
         return Err(provider_error(
             source,
             format!(
-                "Downloaded mod size does not match metadata ({} vs {expected_size} bytes).",
+                "Downloaded {display_name} size does not match metadata ({} vs {expected_size} bytes).",
                 bytes.len()
             ),
         ));
     }
 
-    std::fs::create_dir_all(mods_directory).map_err(|error| {
+    std::fs::create_dir_all(directory).map_err(|error| {
         provider_error(
             source,
-            format!("Could not create the instance mods directory: {error}"),
+            format!("Could not create the {display_name} directory: {error}"),
         )
     })?;
-    let destination = mods_directory.join(&file.filename);
-    let mut temporary = tempfile::NamedTempFile::new_in(mods_directory).map_err(|error| {
+    let destination = directory.join(&file.filename);
+    let mut temporary = tempfile::NamedTempFile::new_in(directory).map_err(|error| {
         provider_error(
             source,
-            format!("Could not create a temporary mod file: {error}"),
+            format!("Could not create a temporary {display_name} file: {error}"),
         )
     })?;
     temporary.write_all(&bytes).map_err(|error| {
         provider_error(
             source,
-            format!("Could not save the downloaded mod: {error}"),
+            format!("Could not save the downloaded {display_name}: {error}"),
         )
     })?;
     temporary.flush().map_err(|error| {
         provider_error(
             source,
-            format!("Could not flush the downloaded mod: {error}"),
+            format!("Could not flush the downloaded {display_name}: {error}"),
         )
     })?;
     temporary.as_file().sync_all().map_err(|error| {
         provider_error(
             source,
-            format!("Could not sync the downloaded mod: {error}"),
+            format!("Could not sync the downloaded {display_name}: {error}"),
         )
     })?;
 
@@ -581,13 +729,13 @@ async fn download_mod_file(
             mc_launcher_core::io::hash::sha1_file(temporary.path()).map_err(|error| {
                 provider_error(
                     source,
-                    format!("Could not verify the downloaded mod: {error}"),
+                    format!("Could not verify the downloaded {display_name}: {error}"),
                 )
             })?;
         if !actual_sha1.eq_ignore_ascii_case(&expected_sha1) {
             return Err(provider_error(
                 source,
-                "The downloaded mod failed its SHA-1 checksum.".into(),
+                format!("The downloaded {display_name} failed its SHA-1 checksum."),
             ));
         }
     }
@@ -595,17 +743,9 @@ async fn download_mod_file(
     temporary.persist(&destination).map_err(|error| {
         provider_error(
             source,
-            format!("Could not install the downloaded mod: {}", error.error),
+            format!("Could not install the downloaded {display_name}: {}", error.error),
         )
     })?;
-
-    super::installed::record_install(mods_directory, project_id.to_owned(), &file.filename)
-        .map_err(|error| {
-            provider_error(
-                source,
-                format!("Mod saved, but could not record installation: {error}"),
-            )
-        })?;
 
     Ok(file.filename)
 }
@@ -618,7 +758,7 @@ async fn resolve_compatible_mod_file(
     source: ModSource,
     compatibility: &ModCompatibilityFilter,
     curseforge_api_key: Option<&str>,
-) -> Result<(ModDownloadFile, Vec<String>), CatalogProviderError> {
+) -> Result<(ProjectDownloadFile, Vec<String>), CatalogProviderError> {
     match source {
         ModSource::Modrinth => {
             let id = project_id.strip_prefix("modrinth:").unwrap_or(project_id);
@@ -671,7 +811,7 @@ async fn resolve_compatible_mod_file(
                 .ok_or_else(|| provider_error(source, "The mod version has no files.".into()))?;
             let required_dependencies = modrinth_required_dependencies(&version);
             Ok((
-                ModDownloadFile {
+                ProjectDownloadFile {
                     source,
                     url: file.url.clone(),
                     filename: file.filename.clone(),
@@ -751,7 +891,7 @@ async fn resolve_compatible_mod_file(
                 .find(|hash| hash.algo == 1)
                 .map(|hash| hash.value);
             Ok((
-                ModDownloadFile {
+                ProjectDownloadFile {
                     source,
                     url: download_url,
                     filename: file.file_name,
@@ -768,16 +908,154 @@ async fn resolve_compatible_mod_file(
     }
 }
 
+async fn resolve_compatible_content_file(
+    client: Arc<dyn HttpClient>,
+    project_id: &str,
+    source: ModSource,
+    kind: ProjectKind,
+    game_version: &str,
+    curseforge_api_key: Option<&str>,
+) -> Result<ProjectDownloadFile, CatalogProviderError> {
+    match source {
+        ModSource::Modrinth => {
+            let id = project_id.strip_prefix("modrinth:").unwrap_or(project_id);
+            let game_versions = serde_json::to_string(&[game_version]).map_err(|error| {
+                provider_error(
+                    source,
+                    format!("Could not prepare the Minecraft version filter: {error}"),
+                )
+            })?;
+            let url = format!(
+                "https://api.modrinth.com/v2/project/{}/version?game_versions={}&include_changelog=false",
+                encode_query_component(id),
+                encode_query_component(&game_versions),
+            );
+            let body = request_body(client, &url, None, source).await?;
+            let versions: Vec<ModrinthVersion> = serde_json::from_str(&body).map_err(|error| {
+                provider_error(source, format!("Invalid project versions response: {error}"))
+            })?;
+            let version = versions
+                .into_iter()
+                .find(|version| version.game_versions.iter().any(|value| value == game_version))
+                .ok_or_else(|| no_compatible_content_file(source, kind, game_version))?;
+            let file = version
+                .files
+                .iter()
+                .find(|file| file.primary)
+                .or_else(|| version.files.first())
+                .ok_or_else(|| provider_error(source, "The project version has no files.".into()))?;
+            Ok(ProjectDownloadFile {
+                source,
+                url: file.url.clone(),
+                filename: file.filename.clone(),
+                sha1: file.hashes.get("sha1").cloned(),
+                size: Some(file.size),
+            })
+        }
+        ModSource::CurseForge => {
+            let api_key = curseforge_api_key
+                .filter(|key| !key.trim().is_empty())
+                .ok_or_else(|| CatalogProviderError {
+                    provider: source,
+                    message:
+                        "Set the CURSEFORGE_API_KEY environment variable to enable CurseForge."
+                            .into(),
+                    missing_api_key: true,
+                    no_compatible_file: false,
+                })?;
+            let id = project_id
+                .strip_prefix("curseforge:")
+                .unwrap_or(project_id)
+                .parse::<u64>()
+                .map_err(|error| {
+                    provider_error(source, format!("Invalid CurseForge project id: {error}"))
+                })?;
+            let url = format!(
+                "{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}/files?gameVersion={}&pageSize=50&index=0",
+                encode_query_component(game_version),
+            );
+            let body = request_body(client.clone(), &url, Some(api_key), source).await?;
+            let response: CurseForgeFilesResponse =
+                serde_json::from_str(&body).map_err(|error| {
+                    provider_error(source, format!("Invalid project files response: {error}"))
+                })?;
+            let mut compatible_files = response
+                .data
+                .into_iter()
+                .filter(|file| file.game_versions.iter().any(|value| value == game_version))
+                .collect::<Vec<_>>();
+            let file_index = compatible_files
+                .iter()
+                .position(|file| file.release_type == 1)
+                .or_else(|| (!compatible_files.is_empty()).then_some(0))
+                .ok_or_else(|| no_compatible_content_file(source, kind, game_version))?;
+            let file = compatible_files.swap_remove(file_index);
+            let download_url = match file.download_url.filter(|url| !url.trim().is_empty()) {
+                Some(url) => url,
+                None => {
+                    let url = format!(
+                        "{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}/files/{}/download-url",
+                        file.id
+                    );
+                    let body = request_body(client, &url, Some(api_key), source).await?;
+                    let response: CurseForgeDownloadUrlResponse =
+                        serde_json::from_str(&body).map_err(|error| {
+                            provider_error(
+                                source,
+                                format!("Invalid project download URL response: {error}"),
+                            )
+                        })?;
+                    response.data
+                }
+            };
+            let sha1 = file
+                .hashes
+                .into_iter()
+                .find(|hash| hash.algo == 1)
+                .map(|hash| hash.value);
+            Ok(ProjectDownloadFile {
+                source,
+                url: download_url,
+                filename: file.file_name,
+                sha1,
+                size: Some(file.file_length),
+            })
+        }
+        ModSource::All => Err(provider_error(
+            source,
+            "A catalog provider is required to download this project.".into(),
+        )),
+    }
+}
+
+fn no_compatible_content_file(
+    source: ModSource,
+    kind: ProjectKind,
+    game_version: &str,
+) -> CatalogProviderError {
+    let content_name = match kind {
+        ProjectKind::ResourcePack => "resource pack",
+        ProjectKind::Shader => "shader pack",
+        ProjectKind::Mod => "mod",
+        ProjectKind::Modpack => "modpack",
+    };
+    CatalogProviderError {
+        provider: source,
+        message: format!(
+            "No compatible {content_name} was found for Minecraft {game_version}."
+        ),
+        missing_api_key: false,
+        no_compatible_file: true,
+    }
+}
+
 async fn request_bytes(
     client: Arc<dyn HttpClient>,
     url: &str,
     provider: ModSource,
 ) -> Result<Vec<u8>, CatalogProviderError> {
     if !url.starts_with("https://") {
-        return Err(provider_error(
-            provider,
-            "The mod file URL is invalid.".into(),
-        ));
+        return Err(provider_error(provider, "The file URL is invalid.".into()));
     }
     let request = Request::builder()
         .uri(url)
@@ -789,12 +1067,12 @@ async fn request_bytes(
     let response = client
         .send(request)
         .await
-        .map_err(|error| provider_error(provider, format!("Mod download failed: {error}")))?;
+        .map_err(|error| provider_error(provider, format!("File download failed: {error}")))?;
     let status = response.status();
     if !status.is_success() {
         return Err(provider_error(
             provider,
-            format!("The mod download returned HTTP {status}."),
+            format!("The file download returned HTTP {status}."),
         ));
     }
     let mut body = futures::io::AsyncReadExt::take(response.into_body(), 512 * 1024 * 1024 + 1);
@@ -802,12 +1080,12 @@ async fn request_bytes(
     futures::io::AsyncReadExt::read_to_end(&mut body, &mut bytes)
         .await
         .map_err(|error| {
-            provider_error(provider, format!("Could not read mod download: {error}"))
+            provider_error(provider, format!("Could not read the file download: {error}"))
         })?;
     if bytes.len() as u64 > 512 * 1024 * 1024 {
         return Err(provider_error(
             provider,
-            "The mod file is larger than the 512 MiB download limit.".into(),
+            "The file is larger than the 512 MiB download limit.".into(),
         ));
     }
     Ok(bytes)
@@ -856,7 +1134,7 @@ fn curseforge_required_dependencies(file: &CurseForgeFile) -> Vec<String> {
 }
 
 #[derive(Clone, Debug)]
-struct ModDownloadFile {
+struct ProjectDownloadFile {
     source: ModSource,
     url: String,
     filename: String,
@@ -1160,6 +1438,8 @@ struct ModrinthLicense {
 #[derive(Deserialize)]
 struct ModrinthGalleryImage {
     url: String,
+    #[serde(default)]
+    raw_url: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -1816,6 +2096,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn modrinth_original_candidates_strip_size_markers() {
+        assert_eq!(
+            super::modrinth_original_candidates(
+                "https://cdn.modrinth.com/data/QhX1nx34/images/hash_350.webp",
+            ),
+            vec![
+                "https://cdn.modrinth.com/data/QhX1nx34/images/hash.webp".to_owned(),
+                "https://cdn.modrinth.com/data/QhX1nx34/images/hash.png".to_owned(),
+                "https://cdn.modrinth.com/data/QhX1nx34/images/hash.jpg".to_owned(),
+                "https://cdn.modrinth.com/data/QhX1nx34/images/hash.jpeg".to_owned(),
+            ]
+        );
+        // Unsuffixed originals and non-URL values have nothing to probe.
+        assert!(
+            super::modrinth_original_candidates(
+                "https://cdn.modrinth.com/data/QhX1nx34/images/hash.webp",
+            )
+            .is_empty()
+        );
+        assert!(super::modrinth_original_candidates("guessing.png").is_empty());
+    }
+
     fn fetch_project_info_from_modrinth(project: super::ModrinthProject) -> super::ModProjectInfo {
         super::build_modrinth_info(project)
     }
@@ -1826,3 +2129,4 @@ mod tests {
         super::build_curseforge_info(project)
     }
 }
+

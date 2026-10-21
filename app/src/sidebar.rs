@@ -21,7 +21,9 @@ impl LauncherApp {
             .bg(rgb(palette.surface))
             .border_1()
             .border_color(rgb(palette.border))
+            .text_size(px(14.))
             .prefix(IconName::Search)
+            .cleanable(true)
             .aria_label(locale.text("Поиск по каталогу", "Search catalog"))
             .into_any_element()
     }

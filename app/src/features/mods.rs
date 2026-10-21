@@ -44,6 +44,23 @@ mod filter_tests {
         assert!(state.search_filters().loader.is_none());
         assert_eq!(state.category(), ModCategory::All);
     }
+
+    #[test]
+    fn gallery_index_clamps_to_the_loaded_gallery() {
+        let mut state = ModsState::default();
+        state.set_gallery_index(0, 5);
+        assert_eq!(state.gallery_index(), 0);
+        state.set_gallery_index(3, 5);
+        assert_eq!(state.gallery_index(), 3);
+        state.set_gallery_index(9, 5);
+        assert_eq!(state.gallery_index(), 4);
+        // Wrap-around callers pass the raw modulo result; clamping keeps
+        // the index inside whatever gallery is currently loaded.
+        state.set_gallery_index(0, 0);
+        assert_eq!(state.gallery_index(), 0);
+        state.set_gallery_index(2, 1);
+        assert_eq!(state.gallery_index(), 0);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -165,6 +182,14 @@ impl ProjectKind {
             Self::Modpack => 4471,
             Self::ResourcePack => 12,
             Self::Shader => 6552,
+        }
+    }
+
+    pub(crate) fn install_directory(self) -> Option<&'static str> {
+        match self {
+            Self::ResourcePack => Some("resourcepacks"),
+            Self::Shader => Some("shaderpacks"),
+            Self::Mod | Self::Modpack => None,
         }
     }
 
@@ -419,6 +444,8 @@ pub struct ModsState {
     info_loading: bool,
     info_error: Option<String>,
     detail_tab: ModDetailTab,
+    /// Position of the selected screenshot in the project gallery.
+    gallery_index: usize,
     translations: std::collections::HashMap<TranslationKey, TranslationState>,
     /// Mods installed into each build, for the build details page.
     build_mods: std::collections::HashMap<uuid::Uuid, Vec<installed::InstalledModEntry>>,
@@ -595,6 +622,7 @@ impl ModsState {
         self.project_info = None;
         self.info_loading = true;
         self.info_error = None;
+        self.gallery_index = 0;
         self.detail_tab = ModDetailTab::Description;
         self.description_request_id
     }
@@ -685,6 +713,16 @@ impl ModsState {
             }
         }
         true
+    }
+
+    /// The selected screenshot position of the project gallery.
+    pub fn gallery_index(&self) -> usize {
+        self.gallery_index
+    }
+
+    /// Moves the gallery to `index`, clamped to the loaded gallery.
+    pub fn set_gallery_index(&mut self, index: usize, gallery_len: usize) {
+        self.gallery_index = index.min(gallery_len.saturating_sub(1));
     }
 
     pub fn detail_tab(&self) -> ModDetailTab {

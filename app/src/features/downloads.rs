@@ -23,7 +23,8 @@ impl DownloadSummary {
                     speed_bps,
                     ..
                 } => (received, total_bytes, speed_bps),
-                InstanceRuntime::DownloadingMod { .. } => (0, None, 0.),
+                InstanceRuntime::DownloadingMod { .. }
+                | InstanceRuntime::DownloadingContent { .. } => (0, None, 0.),
                 _ => return None,
             };
             Some(Self {

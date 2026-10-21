@@ -9,10 +9,10 @@ use crate::{
         is_valid_player_name, launch_profile,
     },
     features::mods::{
-        ModCompatibilityFilter, ModsState,
+        ModCompatibilityFilter, ModsState, ProjectKind,
         catalog::{
             ModProject, ModSource, fetch_project_description, fetch_project_info,
-            install_compatible_mod, search_catalog,
+            install_compatible_content, install_compatible_mod, search_catalog,
         },
         installed, translation,
     },
@@ -401,6 +401,7 @@ impl LauncherApp {
                 || matches!(
                     self.instances.runtime(&id),
                     InstanceRuntime::DownloadingMod { .. }
+                        | InstanceRuntime::DownloadingContent { .. }
                         | InstanceRuntime::Removing
                         | InstanceRuntime::Installing { .. }
                 )
@@ -622,6 +623,79 @@ impl LauncherApp {
                     Err(error) => {
                         this.instances
                             .mark_mod_download_failed(profile_id, error.message);
+                    }
+                }
+                this.mods.installed.finish_install(&pending_project_id);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn start_content_download(
+        &mut self,
+        project: ModProject,
+        profile_id: uuid::Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        if project.kind.install_directory().is_none()
+            || self.mods.installed.is_installing(&project.id)
+        {
+            return;
+        }
+        let Some(profile) = self.instances.profile(profile_id).cloned() else {
+            return;
+        };
+        if self.instances.runtime(&profile_id).is_busy() {
+            return;
+        }
+
+        let game_directory =
+            profile_store::instance_directory(&profile.installation_root, profile_id);
+        let game_version = profile.game_version.clone();
+        let project_id = project.id.clone();
+        let pending_project_id = project_id.clone();
+        let source = project.source;
+        let kind = project.kind;
+        let locale = self.settings.locale();
+        self.instances.mark_content_downloading(
+            profile_id,
+            format!("{} · {}", kind.title(locale), project.name),
+        );
+        self.mods.installed.begin_install(&project_id);
+        let client = cx.http_client();
+        let curseforge_api_key = std::env::var("CURSEFORGE_API_KEY").ok();
+        cx.notify();
+
+        let download_task = cx.background_executor().spawn(async move {
+            install_compatible_content(
+                client,
+                project_id,
+                source,
+                kind,
+                game_version,
+                curseforge_api_key,
+                game_directory,
+            )
+            .await
+        });
+        cx.spawn(async move |this, cx| {
+            let result = download_task.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(filename) => {
+                        tracing::info!(
+                            profile_id = %profile_id,
+                            ?kind,
+                            %filename,
+                            "installed project content into profile"
+                        );
+                        this.instances
+                            .mark_content_downloaded(profile_id, filename);
+                    }
+                    Err(error) => {
+                        this.instances
+                            .mark_content_download_failed(profile_id, error.message);
                     }
                 }
                 this.mods.installed.finish_install(&pending_project_id);

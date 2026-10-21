@@ -188,6 +188,37 @@ impl LauncherApp {
                 name.clone(),
                 locale.text("Скачивание…", "Downloading…"),
             ),
+            InstanceRuntime::DownloadingContent { name } => (
+                locale
+                    .text("Установка контента", "Installing content")
+                    .to_owned(),
+                name.clone(),
+                locale.text("Скачивание…", "Downloading…"),
+            ),
+            InstanceRuntime::ContentDownloadFailed { message } => (
+                locale
+                    .text("Не удалось установить контент", "Content installation failed")
+                    .to_owned(),
+                message.clone(),
+                if is_installed {
+                    locale.text("Играть", "Play")
+                } else {
+                    locale.text("Установить", "Install")
+                },
+            ),
+            InstanceRuntime::ContentDownloaded { filename } => (
+                locale.text("Контент установлен", "Content installed").to_owned(),
+                format!(
+                    "{}{}",
+                    locale.text("Файл добавлен: ", "File added: "),
+                    filename
+                ),
+                if is_installed {
+                    locale.text("Играть", "Play")
+                } else {
+                    locale.text("Установить игру", "Install game")
+                },
+            ),
             InstanceRuntime::ModDownloadFailed { message } => (
                 locale
                     .text("Не удалось скачать мод", "Mod download failed")

@@ -68,20 +68,24 @@ impl LauncherApp {
             })
             .collect();
 
-        let primary_action = if project_kind == ProjectKind::Mod {
-            self.mod_install_action(sample, palette, locale, cx)
-        } else {
-            let page_url = project_url.clone();
-            UiButton::new(format!("open-project-page-{}", sample.id))
-                .px_3()
-                .py_2()
-                .rounded(px(7.))
-                .bg(rgb(palette.accent))
-                .text_color(rgb(palette.accent_foreground))
-                .hover(|style| style.opacity(0.9))
-                .on_click(move |_, _, cx| cx.open_url(&page_url))
-                .child(locale.text("Открыть страницу", "Open project page"))
-                .into_any_element()
+        let primary_action = match project_kind {
+            ProjectKind::Mod => self.mod_install_action(sample, palette, locale, cx),
+            ProjectKind::ResourcePack | ProjectKind::Shader => {
+                self.content_install_action(sample, palette, locale, cx)
+            }
+            ProjectKind::Modpack => {
+                let page_url = project_url.clone();
+                UiButton::new(format!("open-project-page-{}", sample.id))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(7.))
+                    .bg(rgb(palette.accent))
+                    .text_color(rgb(palette.accent_foreground))
+                    .hover(|style| style.opacity(0.9))
+                    .on_click(move |_, _, cx| cx.open_url(&page_url))
+                    .child(locale.text("Открыть страницу", "Open project page"))
+                    .into_any_element()
+            }
         };
 
         let hero = div()
@@ -380,21 +384,23 @@ impl LauncherApp {
                 let description_view = match sample.source {
                     ModSource::CurseForge => gpui_kit::component::text::html(description),
                     ModSource::All | ModSource::Modrinth => {
-                        gpui_kit::component::text::markdown(description)
+                        gpui_kit::component::text::markdown(enlarge_markdown_badges(description))
                     }
                 }
                 .w_full()
-                .text_size(px(12.))
-                .text_color(rgb(palette.muted))
+                .text_size(px(15.))
+                .text_color(rgb(palette.foreground))
                 .style(
                     gpui_kit::component::text::TextViewStyle::default()
-                        .paragraph_gap(rems(0.5))
+                        .paragraph_gap(rems(0.65))
                         .heading_font_size(|level, _| {
                             px(match level {
-                                1 => 22.,
-                                2 => 19.,
-                                3 => 16.,
-                                _ => 14.,
+                                1 => 28.,
+                                2 => 24.,
+                                3 => 20.,
+                                4 => 18.,
+                                5 => 16.,
+                                _ => 15.,
                             })
                         }),
                 );
@@ -426,7 +432,7 @@ impl LauncherApp {
                         })
                     };
                 let screenshots = if sample.kind == ProjectKind::Mod {
-                    self.mod_screenshots(sample, palette, locale)
+                    self.mod_screenshots(sample, palette, locale, cx)
                 } else {
                     div().into_any_element()
                 };
@@ -492,7 +498,7 @@ impl LauncherApp {
                         .on_click(cx.listener({
                             let project = sample.clone();
                             move |this, _, window, cx| {
-                                this.open_mod_download_dialog(project.clone(), window, cx);
+                                this.open_project_install_dialog(project.clone(), window, cx);
                             }
                         }))
                         .child(locale.text("Скачать в сборку", "Download to a build")),
@@ -514,7 +520,7 @@ impl LauncherApp {
                     palette,
                 ))
                 .into_any_element(),
-            ModDetailTab::Screenshots => self.mod_screenshots(sample, palette, locale),
+            ModDetailTab::Screenshots => self.mod_screenshots(sample, palette, locale, cx),
             ModDetailTab::Similar => {
                 let similar: Vec<_> = SAMPLE_MODS
                     .iter()
@@ -536,6 +542,7 @@ impl LauncherApp {
         sample: &ModProject,
         palette: Palette,
         locale: Locale,
+        cx: &Context<Self>,
     ) -> AnyElement {
         let header = div()
             .h_flex()
@@ -585,18 +592,197 @@ impl LauncherApp {
                     .into_any_element(),
             }
         } else {
-            let cards: Vec<_> = gallery
-                .iter()
-                .map(|image| mod_gallery_item(image, sample, palette))
-                .collect();
-            div()
-                .id(format!("mod-gallery-{}", sample.id))
+            let gallery_len = gallery.len();
+            let index = self.mods.gallery_index().min(gallery_len - 1);
+            let current = &gallery[index];
+            let project_id = sample.id.clone();
+
+            let viewer = div()
+                .id(format!("mod-gallery-viewer-{project_id}"))
+                .w_full()
+                .min_w_0()
+                .h(px(300.))
+                .rounded(px(10.))
+                .overflow_hidden()
+                .bg(rgb(palette.background))
+                .border_1()
+                .border_color(rgb(palette.border))
+                .cursor_pointer()
+                .child(
+                    img(current
+                        .full_url
+                        .clone()
+                        .unwrap_or_else(|| current.url.clone()))
+                    .size_full()
+                    .object_fit(ObjectFit::Contain)
+                    .with_loading(move || gallery_placeholder(palette))
+                    .with_fallback(move || gallery_placeholder(palette)),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_gallery_dialog(index, window, cx);
+                }));
+
+            let bar = div()
                 .h_flex()
                 .w_full()
                 .min_w_0()
+                .items_center()
                 .gap_2()
-                .overflow_x_scrollbar()
-                .children(cards)
+                .child(
+                    UiButton::new(format!("mod-gallery-prev-{project_id}"))
+                        .px_3()
+                        .py_2()
+                        .rounded(px(7.))
+                        .bg(rgb(palette.control))
+                        .text_color(rgb(palette.foreground))
+                        .hover(|style| style.bg(rgb(palette.hover)))
+                        .accessibility_label(
+                            locale.text("Предыдущий скриншот", "Previous screenshot"),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.mods.set_gallery_index(
+                                (index + gallery_len - 1) % gallery_len,
+                                gallery_len,
+                            );
+                            cx.notify();
+                        }))
+                        .child(IconName::ChevronLeft),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette.muted))
+                        .child(format!("{} / {gallery_len}", index + 1)),
+                )
+                .child(
+                    UiButton::new(format!("mod-gallery-next-{project_id}"))
+                        .px_3()
+                        .py_2()
+                        .rounded(px(7.))
+                        .bg(rgb(palette.control))
+                        .text_color(rgb(palette.foreground))
+                        .hover(|style| style.bg(rgb(palette.hover)))
+                        .accessibility_label(locale.text("Следующий скриншот", "Next screenshot"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.mods
+                                .set_gallery_index((index + 1) % gallery_len, gallery_len);
+                            cx.notify();
+                        }))
+                        .child(IconName::ChevronRight),
+                )
+                .child(div().flex_1())
+                .child(
+                    UiButton::new(format!("mod-gallery-fullscreen-{project_id}"))
+                        .px_3()
+                        .py_2()
+                        .rounded(px(7.))
+                        .bg(rgb(palette.control))
+                        .text_color(rgb(palette.foreground))
+                        .hover(|style| style.bg(rgb(palette.hover)))
+                        .accessibility_label(
+                            locale.text("Открыть на весь экран", "View fullscreen"),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_gallery_dialog(index, window, cx);
+                        }))
+                        .child(IconName::Expand),
+                );
+
+            let strip = if gallery_len > 1 {
+                let thumbs: Vec<_> = gallery
+                    .iter()
+                    .enumerate()
+                    .map(|(thumb_index, image)| {
+                        let is_active = thumb_index == index;
+                        let project_id = project_id.clone();
+                        let icon = sample.icon;
+                        let icon_background = sample.icon_background;
+                        let icon_foreground = sample.icon_foreground;
+                        let url = if image.thumbnail.trim().is_empty() {
+                            image.url.clone()
+                        } else {
+                            image.thumbnail.clone()
+                        };
+                        div()
+                            .id(format!("mod-gallery-thumb-{project_id}-{thumb_index}"))
+                            .flex_shrink_0()
+                            .w(px(64.))
+                            .h(px(44.))
+                            .rounded(px(6.))
+                            .overflow_hidden()
+                            .bg(rgb(palette.control))
+                            .border_2()
+                            .border_color(rgb(if is_active {
+                                palette.accent
+                            } else {
+                                palette.border
+                            }))
+                            .cursor_pointer()
+                            .hover(|style| style.opacity(0.85))
+                            .child(
+                                img(url)
+                                    .size_full()
+                                    .object_fit(ObjectFit::Cover)
+                                    .with_loading(move || {
+                                        mod_icon_placeholder(
+                                            icon,
+                                            icon_background,
+                                            icon_foreground,
+                                            px(44.),
+                                        )
+                                    })
+                                    .with_fallback(move || {
+                                        mod_icon_placeholder(
+                                            icon,
+                                            icon_background,
+                                            icon_foreground,
+                                            px(44.),
+                                        )
+                                    }),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.mods.set_gallery_index(thumb_index, gallery_len);
+                                cx.notify();
+                            }))
+                    })
+                    .collect();
+                div()
+                    .id(format!("mod-gallery-strip-{project_id}"))
+                    .h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .overflow_x_scrollbar()
+                    .children(thumbs)
+                    .into_any_element()
+            } else {
+                div().into_any_element()
+            };
+
+            let caption = if current.title.trim().is_empty() {
+                current.description.trim().to_owned()
+            } else {
+                current.title.trim().to_owned()
+            };
+
+            div()
+                .v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .child(viewer)
+                .child(bar)
+                .when(!caption.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette.muted))
+                            .child(caption),
+                    )
+                })
+                .child(strip)
                 .into_any_element()
         };
 
@@ -637,66 +823,98 @@ fn detail_link_button(
         .into_any_element()
 }
 
-/// One gallery screenshot card: cropped preview plus its title/description.
-fn mod_gallery_item(image: &ModGalleryImage, sample: &ModProject, palette: Palette) -> AnyElement {
-    // Prefer the smaller preview; fall back to the full image.
-    let preview_url = if image.thumbnail.trim().is_empty() {
-        image.url.clone()
-    } else {
-        image.thumbnail.clone()
-    };
-    let icon = sample.icon;
-    let icon_background = sample.icon_background;
-    let icon_foreground = sample.icon_foreground;
-    let caption = if image.title.trim().is_empty() {
-        image.description.trim().to_owned()
-    } else {
-        image.title.trim().to_owned()
-    };
+/// Fills gallery slots while a screenshot loads.
+fn gallery_placeholder(palette: Palette) -> AnyElement {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(28.))
+        .text_color(rgb(palette.muted))
+        .child(IconName::GalleryVerticalEnd)
+        .into_any_element()
+}
 
-    let mut card = div()
-        .v_flex()
-        .flex_shrink_0()
-        .w(px(224.))
-        .min_w_0()
-        .rounded(px(10.))
-        .overflow_hidden()
-        .bg(rgb(palette.surface))
-        .border_1()
-        .border_color(rgb(palette.border))
-        .child(
-            div()
-                .w_full()
-                .h(px(126.))
-                .min_w_0()
-                .overflow_hidden()
-                .bg(rgb(palette.control))
-                .child(
-                    img(preview_url)
-                        .size_full()
-                        .object_fit(ObjectFit::Cover)
-                        .with_loading(move || {
-                            mod_icon_placeholder(icon, icon_background, icon_foreground, px(126.))
-                        })
-                        .with_fallback(move || {
-                            mod_icon_placeholder(icon, icon_background, icon_foreground, px(126.))
-                        }),
-                ),
-        );
+/// Markdown renders inline images at text-line height, which makes provider
+/// badges nearly unreadable. Give loader badges extra height and keep other
+/// linked badges compact; leave standalone screenshots at their original size.
+fn enlarge_markdown_badges(markdown: String) -> String {
+    let mut rendered = String::with_capacity(markdown.len());
+    let mut remaining = markdown.as_str();
 
-    if !caption.is_empty() {
-        card = card.child(
-            div()
-                .w_full()
-                .min_w_0()
-                .px_2()
-                .py_1()
-                .text_size(px(10.))
-                .text_color(rgb(palette.muted))
-                .truncate()
-                .child(caption),
-        );
+    while let Some(image_start) = remaining.find("![") {
+        rendered.push_str(&remaining[..image_start]);
+        let image = &remaining[image_start..];
+        let linked_image = image_start > 0 && remaining[..image_start].ends_with('[');
+        if let Some((image_len, badge)) = enlarged_markdown_badge(image, linked_image) {
+            rendered.push_str(&badge);
+            remaining = &image[image_len..];
+        } else {
+            rendered.push_str("![");
+            remaining = &image[2..];
+        }
     }
 
-    card.into_any_element()
+    rendered.push_str(remaining);
+    rendered
+}
+
+fn enlarged_markdown_badge(image: &str, linked_image: bool) -> Option<(usize, String)> {
+    let alt_end = image[2..].find("](")? + 2;
+    let alt = &image[2..alt_end];
+    let alt_lower = alt.to_ascii_lowercase();
+    let is_loader_badge =
+        alt_lower.starts_with("available for ") || alt_lower.starts_with("available on ");
+    if !linked_image && !is_loader_badge {
+        return None;
+    }
+
+    let url_start = alt_end + 2;
+    let destination_and_title = &image[url_start..];
+    let mut depth = 1usize;
+    let mut escaped = false;
+    let mut close = None;
+    for (offset, character) in destination_and_title.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '\\' => escaped = true,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    let destination = destination_and_title[..close]
+        .split_whitespace()
+        .next()?;
+    if !destination.starts_with("https://") {
+        return None;
+    }
+
+    let source = escape_html_attribute(destination);
+    let alt = escape_html_attribute(alt);
+    let height = if is_loader_badge { 32 } else { 20 };
+    let image_len = url_start + close + 1;
+    Some((
+        image_len,
+        format!(r#"<img src="{source}" alt="{alt}" height="{height}" />"#),
+    ))
+}
+
+fn escape_html_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }

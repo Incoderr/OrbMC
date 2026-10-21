@@ -1,6 +1,7 @@
 use crate::app::LauncherApp;
 use crate::app::theme::Palette;
 use crate::app::ui::*;
+use crate::features::mods::ProjectKind;
 use crate::features::mods::catalog::*;
 use crate::features::versions::*;
 use crate::router::Page;
@@ -10,40 +11,44 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::*;
 
 impl LauncherApp {
-    pub(crate) fn open_mod_download_dialog(
+    pub(crate) fn open_project_install_dialog(
         &mut self,
         project: ModProject,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(id) = self.mods.target_profile() {
-            self.start_mod_download(project, id, cx);
-            return;
+        if project.kind == ProjectKind::Mod {
+            if let Some(id) = self.mods.target_profile() {
+                self.start_mod_download(project, id, cx);
+                return;
+            }
         }
         let locale = self.settings.locale();
         let palette = Palette::for_settings(self.settings.theme(), self.settings.accent());
+        let is_mod = project.kind == ProjectKind::Mod;
         let profiles = self
             .instances
             .profiles()
             .iter()
             .map(|profile| {
                 let runtime = self.instances.runtime(&profile.id);
-                let busy = self.mods.installed.contains(profile.id, &project.id)
-                    || self.mods.installed.is_loading(profile.id)
-                    || runtime.is_busy();
-                (
-                    profile.clone(),
-                    busy,
-                    self.mods.installed.contains(profile.id, &project.id),
-                )
+                let installed = is_mod && self.mods.installed.contains(profile.id, &project.id);
+                let busy = runtime.is_busy()
+                    || self.mods.installed.is_installing(&project.id)
+                    || (is_mod && self.mods.installed.is_loading(profile.id));
+                (profile.clone(), busy, installed)
             })
             .collect::<Vec<_>>();
         let owner = cx.entity().downgrade();
-        let title = format!(
-            "{} · {}",
-            locale.text("Скачать мод", "Download mod"),
-            project.name
-        );
+        let action = match project.kind {
+            ProjectKind::Mod => locale.text("Скачать мод", "Download mod"),
+            ProjectKind::ResourcePack => {
+                locale.text("Установить текстурпак", "Install resource pack")
+            }
+            ProjectKind::Shader => locale.text("Установить шейдер", "Install shader"),
+            ProjectKind::Modpack => locale.text("Скачать модпак", "Download modpack"),
+        };
+        let title = format!("{} · {}", action, project.name);
 
         window.open_dialog(cx, move |dialog, _, _| {
             let content_owner = owner.clone();
@@ -63,8 +68,8 @@ impl LauncherApp {
                                 .p_4()
                                 .text_color(rgb(palette.foreground))
                                 .child(locale.text(
-                                    "Сначала создай сборку, куда установить мод.",
-                                    "Create a build first, then choose it as the mod destination.",
+                                    "Сначала создай сборку, куда установить контент.",
+                                    "Create a build first, then choose it as the content destination.",
                                 ))
                                 .child(
                                     UiButton::new("mod-download-create-build")
@@ -90,7 +95,8 @@ impl LauncherApp {
                         .iter()
                         .map(|(profile, busy, installed)| {
                             let profile_id = profile.id;
-                            let has_mod_loader = profile.loader != LoaderChoice::Vanilla;
+                            let has_mod_loader = project.kind != ProjectKind::Mod
+                                || profile.loader != LoaderChoice::Vanilla;
                             let profile_details = if *installed {
                                 locale
                                     .text("Установлен в этой сборке", "Installed in this build")
@@ -106,6 +112,8 @@ impl LauncherApp {
                                 locale
                                     .text("Сборка занята другой операцией", "This build is busy")
                                     .to_owned()
+                            } else if project.kind != ProjectKind::Mod {
+                                format!("Minecraft {}", profile.game_version)
                             } else {
                                 format!(
                                     "Minecraft {} · {}",
@@ -115,7 +123,7 @@ impl LauncherApp {
                             };
                             let select_owner = content_owner.clone();
                             let selected_project = project.clone();
-                            UiButton::new(format!("download-mod-to-{profile_id}"))
+                            UiButton::new(format!("download-project-to-{profile_id}"))
                                 .w_full()
                                 .px_3()
                                 .py_3()
@@ -123,16 +131,24 @@ impl LauncherApp {
                                 .bg(rgb(palette.control))
                                 .text_color(rgb(palette.foreground))
                                 .hover(|style| style.bg(rgb(palette.hover)))
-                                .disabled(*busy || !has_mod_loader)
+                                .disabled(*busy || *installed || !has_mod_loader)
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     if let Some(owner) = select_owner.upgrade() {
                                         let _ = owner.update(cx, |this, cx| {
-                                            this.start_mod_download(
-                                                selected_project.clone(),
-                                                profile_id,
-                                                cx,
-                                            );
+                                            if selected_project.kind == ProjectKind::Mod {
+                                                this.start_mod_download(
+                                                    selected_project.clone(),
+                                                    profile_id,
+                                                    cx,
+                                                );
+                                            } else {
+                                                this.start_content_download(
+                                                    selected_project.clone(),
+                                                    profile_id,
+                                                    cx,
+                                                );
+                                            }
                                         });
                                     }
                                 })

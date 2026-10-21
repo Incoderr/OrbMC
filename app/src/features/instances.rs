@@ -92,6 +92,15 @@ pub enum InstanceRuntime {
     DownloadingMod {
         name: String,
     },
+    DownloadingContent {
+        name: String,
+    },
+    ContentDownloadFailed {
+        message: String,
+    },
+    ContentDownloaded {
+        filename: String,
+    },
     ModDownloadFailed {
         message: String,
     },
@@ -123,6 +132,7 @@ impl InstanceRuntime {
             self,
             InstanceRuntime::Installing { .. }
                 | InstanceRuntime::DownloadingMod { .. }
+                | InstanceRuntime::DownloadingContent { .. }
                 | InstanceRuntime::PreparingJava { .. }
                 | InstanceRuntime::Launching
                 | InstanceRuntime::Running { .. }
@@ -340,6 +350,21 @@ impl InstancesState {
     pub fn mark_mod_download_failed(&mut self, id: Uuid, message: String) {
         self.runtime
             .insert(id, InstanceRuntime::ModDownloadFailed { message });
+    }
+
+    pub fn mark_content_downloading(&mut self, id: Uuid, name: String) {
+        self.runtime
+            .insert(id, InstanceRuntime::DownloadingContent { name });
+    }
+
+    pub fn mark_content_downloaded(&mut self, id: Uuid, filename: String) {
+        self.runtime
+            .insert(id, InstanceRuntime::ContentDownloaded { filename });
+    }
+
+    pub fn mark_content_download_failed(&mut self, id: Uuid, message: String) {
+        self.runtime
+            .insert(id, InstanceRuntime::ContentDownloadFailed { message });
     }
 
     /// Applies a vendor progress event to the runtime state.

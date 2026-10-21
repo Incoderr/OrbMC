@@ -781,7 +781,7 @@ impl LauncherApp {
                             }))
                             .disabled(already_installed || busy || checking || installing)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_mod_download_dialog(download_project.clone(), window, cx)
+                                this.open_project_install_dialog(download_project.clone(), window, cx)
                             }))
                             .child(if installing {
                                 locale.text("Устанавливаем…", "Installing…")
@@ -819,6 +819,34 @@ impl LauncherApp {
                         )
                     }),
             )
+            .into_any_element()
+    }
+
+    pub(crate) fn content_install_action(
+        &self,
+        project: &ModProject,
+        palette: Palette,
+        locale: Locale,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let installing = self.mods.installed.is_installing(&project.id);
+        let download_project = project.clone();
+        UiButton::new(format!("install-content-{}", project.id))
+            .px_3()
+            .py_2()
+            .rounded(px(7.))
+            .bg(rgb(palette.accent))
+            .text_color(rgb(palette.accent_foreground))
+            .hover(|style| style.opacity(0.9))
+            .disabled(installing)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_project_install_dialog(download_project.clone(), window, cx)
+            }))
+            .child(if installing {
+                locale.text("Скачиваем…", "Downloading…")
+            } else {
+                locale.text("Установить", "Install")
+            })
             .into_any_element()
     }
 
@@ -946,20 +974,24 @@ impl LauncherApp {
                     ),
             );
 
-        let action = if project.kind == ProjectKind::Mod {
-            self.mod_install_action(project, palette, locale, cx)
-        } else {
-            let page_url = project.page_url.clone();
-            UiButton::new(format!("open-project-{project_id}"))
-                .px_3()
-                .py_2()
-                .rounded(px(7.))
-                .bg(rgb(palette.control))
-                .text_color(rgb(palette.foreground))
-                .hover(|style| style.bg(rgb(palette.hover)))
-                .on_click(move |_, _, cx| cx.open_url(&page_url))
-                .child(locale.text("Открыть", "Open"))
-                .into_any_element()
+        let action = match project.kind {
+            ProjectKind::Mod => self.mod_install_action(project, palette, locale, cx),
+            ProjectKind::ResourcePack | ProjectKind::Shader => {
+                self.content_install_action(project, palette, locale, cx)
+            }
+            ProjectKind::Modpack => {
+                let page_url = project.page_url.clone();
+                UiButton::new(format!("open-project-{project_id}"))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(7.))
+                    .bg(rgb(palette.control))
+                    .text_color(rgb(palette.foreground))
+                    .hover(|style| style.bg(rgb(palette.hover)))
+                    .on_click(move |_, _, cx| cx.open_url(&page_url))
+                    .child(locale.text("Открыть", "Open"))
+                    .into_any_element()
+            }
         };
 
         div()
