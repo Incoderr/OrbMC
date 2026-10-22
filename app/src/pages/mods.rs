@@ -781,7 +781,11 @@ impl LauncherApp {
                             }))
                             .disabled(already_installed || busy || checking || installing)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_project_install_dialog(download_project.clone(), window, cx)
+                                this.open_project_install_dialog(
+                                    download_project.clone(),
+                                    window,
+                                    cx,
+                                )
                             }))
                             .child(if installing {
                                 locale.text("Устанавливаем…", "Installing…")

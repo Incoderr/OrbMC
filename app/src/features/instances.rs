@@ -43,6 +43,10 @@ pub struct InstanceProfile {
     /// Persisted logical launch order; zero means this profile has never been launched.
     #[serde(default)]
     pub last_launch_order: u64,
+    /// Public cover image URL (for example a Modrinth or CurseForge build
+    /// icon); used as the Discord status icon when present.
+    #[serde(default)]
+    pub modpack_icon: Option<String>,
 }
 
 impl InstanceProfile {
@@ -64,6 +68,7 @@ impl InstanceProfile {
             installation_root,
             installed_version_id: None,
             last_launch_order: 0,
+            modpack_icon: None,
         }
     }
 }

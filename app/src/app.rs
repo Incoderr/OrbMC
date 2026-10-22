@@ -16,6 +16,8 @@ use crate::{
         },
         installed, translation,
     },
+    features::rich_presence::PresenceIcon,
+    features::rich_presence::{PresenceActivity, RichPresenceHandle},
     features::settings::{AccentColor, Locale, SettingsState, ThemeChoice},
     features::versions::{
         LoaderChoice, VersionCatalogState, fetch_fabric_game_loaders, fetch_manifests,
@@ -31,6 +33,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use mc_launcher_core::prelude::DownloadControl;
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "dialogs/mod.rs"]
 mod dialogs;
@@ -60,6 +63,10 @@ pub struct LauncherApp {
     versions: VersionCatalogState,
     instances: InstancesState,
     sidebar: SidebarState,
+    /// Queues Discord presence updates for the background IPC task.
+    rich_presence: RichPresenceHandle,
+    /// Profile whose game session is currently shown in Discord.
+    presence_profile: Option<uuid::Uuid>,
     search_input: Entity<InputState>,
     mod_version_input: Entity<InputState>,
     profile_name_input: Entity<InputState>,
@@ -110,6 +117,7 @@ impl LauncherApp {
             _ => AccentColor::Orange,
         });
         settings.set_hide_to_tray(saved_settings.hide_to_tray);
+        settings.set_discord_presence(saved_settings.discord_presence);
         if is_valid_player_name(&saved_settings.offline_player) {
             settings.set_offline_player(saved_settings.offline_player.clone());
         } else {
@@ -183,6 +191,11 @@ impl LauncherApp {
 
         let tray_available = crate::shell::tray::install(window, cx.weak_entity(), cx);
 
+        let (rich_presence, presence_commands) = RichPresenceHandle::session();
+        cx.background_executor()
+            .spawn(crate::features::rich_presence::run(presence_commands))
+            .detach();
+
         Self {
             tray_available,
             active_page: Page::Home,
@@ -198,6 +211,8 @@ impl LauncherApp {
             versions: VersionCatalogState::default(),
             instances,
             sidebar: SidebarState::default(),
+            rich_presence,
+            presence_profile: None,
             search_input,
             mod_version_input,
             profile_name_input,
@@ -271,10 +286,63 @@ impl LauncherApp {
             accent: accent.to_owned(),
             hide_to_tray: self.settings.hide_to_tray(),
             offline_player: self.settings.offline_player().to_owned(),
+            discord_presence: self.settings.discord_presence(),
         };
         if let Err(error) = profile_store::save_settings(&saved) {
             tracing::error!(%error, "failed to persist launcher settings");
         }
+    }
+
+    /// Shows the Discord status for a just-launched profile when presence is
+    /// enabled; ignores profiles that are not running.
+    fn refresh_presence(&mut self, id: uuid::Uuid) {
+        if !self.settings.discord_presence() {
+            return;
+        }
+        let Some(profile) = self.instances.profile(id) else {
+            return;
+        };
+        if !matches!(self.instances.runtime(&id), InstanceRuntime::Running { .. }) {
+            return;
+        }
+        self.presence_profile = Some(id);
+        self.rich_presence.set_activity(PresenceActivity {
+            details: profile.name.clone(),
+            // Build covers (Modrinth/CurseForge metadata) win over the
+            // per-loader icons uploaded to the Discord application.
+            icon: Some(profile.modpack_icon.clone().map_or_else(
+                || PresenceIcon::from_loader(profile.loader),
+                PresenceIcon::Url,
+            )),
+            start_unix: rich_presence_unix_now(),
+        });
+    }
+
+    /// Applies the settings toggle immediately: enabled presence shows the
+    /// status of an already running game, disabled presence clears it.
+    fn set_discord_presence(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings.set_discord_presence(enabled);
+        self.persist_settings();
+        if enabled {
+            let id = self
+                .instances
+                .recent_profiles()
+                .into_iter()
+                .find(|profile| {
+                    matches!(
+                        self.instances.runtime(&profile.id),
+                        InstanceRuntime::Running { .. }
+                    )
+                })
+                .map(|profile| profile.id);
+            if let Some(id) = id {
+                self.refresh_presence(id);
+            }
+        } else {
+            self.presence_profile = None;
+            self.rich_presence.clear();
+        }
+        cx.notify();
     }
 
     fn choose_download_directory(&mut self, cx: &mut Context<Self>) {
@@ -690,8 +758,7 @@ impl LauncherApp {
                             %filename,
                             "installed project content into profile"
                         );
-                        this.instances
-                            .mark_content_downloaded(profile_id, filename);
+                        this.instances.mark_content_downloaded(profile_id, filename);
                     }
                     Err(error) => {
                         this.instances
@@ -1000,15 +1067,28 @@ impl LauncherApp {
             InstanceWorkerEvent::Launched { id, process_id } => {
                 self.instances.mark_running(id, process_id);
                 self.persist_profiles();
+                self.refresh_presence(id);
             }
             InstanceWorkerEvent::PreparingJava { id, detail } => {
                 self.instances.mark_preparing_java(id, detail);
             }
             InstanceWorkerEvent::GameExited { id, code, stderr } => {
                 self.instances.mark_game_stopped(id, code, stderr);
+                if self.presence_profile == Some(id) {
+                    self.presence_profile = None;
+                    self.rich_presence.clear();
+                }
             }
         }
     }
+}
+
+/// Unix seconds right now, or `0` when the clock is unavailable.
+fn rich_presence_unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0)
 }
 
 impl Render for LauncherApp {

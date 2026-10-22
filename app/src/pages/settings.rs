@@ -79,6 +79,14 @@ impl LauncherApp {
                 cx.notify();
             }));
 
+        let discord_presence = Switch::new("settings-discord-presence")
+            .checked(self.settings.discord_presence())
+            .color(rgb(palette.accent))
+            .accessibility_label(locale.text("Discord Rich Presence", "Discord Rich Presence"))
+            .on_change(cx.listener(|this, checked, _, cx| {
+                this.set_discord_presence(*checked, cx);
+            }));
+
         let general_card = div()
             .v_flex()
             .gap_4()
@@ -228,6 +236,46 @@ impl LauncherApp {
                             ),
                     )
                     .child(hide_to_tray),
+            )
+            .child(div().h(px(1.)).w_full().bg(rgb(palette.border)))
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_3()
+                            .text_color(rgb(palette.muted))
+                            .child(IconName::Bot)
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .text_color(rgb(palette.foreground))
+                                            .child(locale.text(
+                                                "Discord Rich Presence",
+                                                "Discord Rich Presence",
+                                            )),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(rgb(palette.muted))
+                                            .child(locale.text(
+                                                "Показывает статус «играет в Minecraft» в Discord, пока запущена игра",
+                                                "Shows a \"playing Minecraft\" status in Discord while the game is running",
+                                            )),
+                                    ),
+                            ),
+                    )
+                    .child(discord_presence),
             );
 
         let theme_card = div()

@@ -14,6 +14,7 @@ pub struct SavedLauncherSettings {
     pub accent: String,
     pub hide_to_tray: bool,
     pub offline_player: String,
+    pub discord_presence: bool,
 }
 
 impl Default for SavedLauncherSettings {
@@ -25,6 +26,7 @@ impl Default for SavedLauncherSettings {
             accent: "orange".to_owned(),
             hide_to_tray: false,
             offline_player: OFFLINE_PLAYER_NAME.to_owned(),
+            discord_presence: true,
         }
     }
 }

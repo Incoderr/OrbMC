@@ -115,6 +115,8 @@ pub struct SettingsState {
     hide_to_tray: bool,
     download_directory: PathBuf,
     offline_player: String,
+    /// Whether game launches update the Discord status.
+    discord_presence: bool,
 }
 
 impl SettingsState {
@@ -141,6 +143,15 @@ impl SettingsState {
     /// Player name used for offline launches (launcher has no account yet).
     pub fn offline_player(&self) -> &str {
         &self.offline_player
+    }
+
+    /// Whether game launches update the Discord status.
+    pub fn discord_presence(&self) -> bool {
+        self.discord_presence
+    }
+
+    pub fn set_discord_presence(&mut self, enabled: bool) {
+        self.discord_presence = enabled;
     }
 
     pub fn set_locale(&mut self, locale: Locale) {

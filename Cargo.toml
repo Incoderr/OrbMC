@@ -26,6 +26,7 @@ mc-launcher-core = "0.1.2"
 uuid = { version = "1.23.1", features = ["serde", "v4"] }
 sha1 = "0.10"
 tempfile = "3"
+discord-rich-presence = "1.1"
 
 [profile.dev.package]
 rs-mc-launcher-core = { opt-level = 3 }

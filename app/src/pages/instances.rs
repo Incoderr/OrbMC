@@ -197,7 +197,10 @@ impl LauncherApp {
             ),
             InstanceRuntime::ContentDownloadFailed { message } => (
                 locale
-                    .text("Не удалось установить контент", "Content installation failed")
+                    .text(
+                        "Не удалось установить контент",
+                        "Content installation failed",
+                    )
                     .to_owned(),
                 message.clone(),
                 if is_installed {
@@ -207,7 +210,9 @@ impl LauncherApp {
                 },
             ),
             InstanceRuntime::ContentDownloaded { filename } => (
-                locale.text("Контент установлен", "Content installed").to_owned(),
+                locale
+                    .text("Контент установлен", "Content installed")
+                    .to_owned(),
                 format!(
                     "{}{}",
                     locale.text("Файл добавлен: ", "File added: "),

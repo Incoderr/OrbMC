@@ -894,9 +894,7 @@ fn enlarged_markdown_badge(image: &str, linked_image: bool) -> Option<(usize, St
         }
     }
     let close = close?;
-    let destination = destination_and_title[..close]
-        .split_whitespace()
-        .next()?;
+    let destination = destination_and_title[..close].split_whitespace().next()?;
     if !destination.starts_with("https://") {
         return None;
     }
