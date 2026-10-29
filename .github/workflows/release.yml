@@ -65,7 +65,10 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/release/orbmc.exe dist/orbmc.exe
           $key = Join-Path $env:RUNNER_TEMP "orbmc-update.key"
-          Set-Content -Path $key -Value $env:SECRET_KEY -NoNewline
+          # rsign needs the comment line too; the secret may hold the whole
+          # key file or only its key line, so the file is rebuilt either way.
+          $encoded = ($env:SECRET_KEY -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1).Trim()
+          Set-Content -Path $key -Value "untrusted comment: rsign encrypted secret key`n$encoded`n" -NoNewline
           try {
             rsign sign -W -s $key -x dist/orbmc.exe.minisig -t "OrbMC $env:GITHUB_REF_NAME" dist/orbmc.exe
           } finally {
