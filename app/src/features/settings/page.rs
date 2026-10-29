@@ -5,6 +5,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, Disableable, StyledExt};
 use gpui_kit::component::button::Button as ComponentButton;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Theme, ThemeMode, tooltip::Tooltip};
 use gpui_kit::prelude::FluentBuilder;
@@ -667,96 +668,17 @@ impl SettingsView {
                     .when(self.palette_open, |column| column.child(palette_grid)),
             );
 
-        let preview = div()
-            .v_flex()
-            .w(px(232.))
-            .gap_3()
-            .p_4()
-            .rounded(px(10.))
-            .bg(rgb(palette.surface))
-            .border_1()
-            .border_color(rgb(palette.border))
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(palette.foreground))
-                    .child(IconName::PanelLeft)
-                    .child(locale.text("Предварительный просмотр", "Preview")),
-            )
-            .child(
-                div()
-                    .v_flex()
-                    .h(px(270.))
-                    .gap_3()
-                    .p_3()
-                    .rounded(px(8.))
-                    .bg(rgb(palette.background))
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .child(
-                        div()
-                            .v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .w_full()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_2()
-                                    .py_2()
-                                    .rounded(px(6.))
-                                    .bg(rgb(palette.selected))
-                                    .text_color(rgb(palette.accent))
-                                    .child(IconName::House)
-                                    .child(locale.text("Главная", "Home")),
-                            )
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_2()
-                                    .py_2()
-                                    .text_color(rgb(palette.muted))
-                                    .child(IconName::Blocks)
-                                    .child(locale.text("Модпаки", "Modpacks")),
-                            ),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .justify_center()
-                            .gap_2()
-                            .py_2()
-                            .rounded(px(7.))
-                            .bg(rgb(palette.accent))
-                            .text_color(rgb(palette.accent_foreground))
-                            .font_weight(FontWeight::BOLD)
-                            .child(IconName::Play)
-                            .child(locale.text("Играть", "Play")),
-                    ),
-            );
-
         div()
-            .h_flex()
+            .v_flex()
             .w_full()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .pr_4()
+            .overflow_y_scrollbar()
             .gap_4()
-            .child(
-                div()
-                    .v_flex()
-                    .flex_1()
-                    .gap_4()
-                    .child(general_card)
-                    .child(appearance_card),
-            )
-            .child(preview)
+            .child(general_card)
+            .child(appearance_card)
             .into_any_element()
     }
 }

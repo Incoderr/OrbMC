@@ -19,7 +19,7 @@ use super::instances::InstancesState;
 use super::settings::SettingsState;
 use crate::platform::self_update;
 
-const RELEASES_API: &str = "https://api.github.com/repos/Incoderr/rs_mc_launcher/releases/latest";
+const RELEASES_API: &str = "https://api.github.com/repos/Incoderr/OrbMC/releases/latest";
 /// Public key (minisign) that release executables are signed with, baked in
 /// at build time. Builds without it never replace themselves.
 const UPDATE_PUBLIC_KEY: Option<&str> = option_env!("ORBMC_UPDATE_PUBLIC_KEY");
@@ -394,6 +394,8 @@ async fn fetch_latest(client: Arc<dyn HttpClient>) -> Result<Option<Release>, Up
         .uri(RELEASES_API)
         .header("Accept", "application/vnd.github+json")
         .timeout(Duration::from_secs(20))
+        // GitHub answers renamed or moved repositories with a redirect.
+        .follow_redirects(RedirectPolicy::FollowAll)
         .body(AsyncBody::empty())
         .map_err(|error| UpdateError::Network(error.to_string()))?;
     let response = client
@@ -509,7 +511,7 @@ mod tests {
     fn github_release(tag: &str) -> GitHubRelease {
         GitHubRelease {
             tag_name: tag.into(),
-            html_url: "https://github.com/Incoderr/rs_mc_launcher/releases/tag/v1".into(),
+            html_url: "https://github.com/Incoderr/OrbMC/releases/tag/v1".into(),
             draft: false,
             prerelease: false,
             assets: ["orbmc.exe", "orbmc.exe.minisig"]
