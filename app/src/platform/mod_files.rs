@@ -51,13 +51,12 @@ pub fn fingerprint(bytes: &[u8]) -> u32 {
         .collect();
     const M: u32 = 0x5bd1e995;
     let mut hash = 1 ^ bytes.len() as u32;
-    let mut chunks = bytes.chunks_exact(4);
-    for chunk in &mut chunks {
-        let mut k = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]).wrapping_mul(M);
+    let (chunks, tail) = bytes.as_chunks::<4>();
+    for chunk in chunks {
+        let mut k = u32::from_le_bytes(*chunk).wrapping_mul(M);
         k ^= k >> 24;
         hash = hash.wrapping_mul(M) ^ k.wrapping_mul(M);
     }
-    let tail = chunks.remainder();
     for (index, byte) in tail.iter().enumerate() {
         hash ^= u32::from(*byte) << (index * 8);
     }

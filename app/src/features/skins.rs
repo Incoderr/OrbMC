@@ -404,8 +404,9 @@ mod tests {
             frame
                 .as_bytes(0)
                 .unwrap()
-                .chunks_exact(4)
-                .any(|pixel| pixel == [30, 20, 10, 255])
+                .as_chunks::<4>()
+                .0
+                .contains(&[30, 20, 10, 255])
         );
         state.cache_selected_preview(id, 10, SkinModel::Classic, frame.clone());
         assert!(state.selected_preview().is_some());
