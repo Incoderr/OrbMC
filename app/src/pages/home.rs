@@ -1,108 +1,133 @@
 use crate::app::LauncherApp;
-use crate::app::theme::Palette;
-use crate::app::ui::*;
-use crate::features::mods::ModSample;
+use crate::features::downloads::DownloadSummary;
+use crate::features::instances::view::widgets::{format_bytes, format_speed};
 use crate::features::settings::*;
 use crate::router::Page;
+use crate::shared::theme::Palette;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
-use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 impl LauncherApp {
-    pub(crate) fn home_page(
-        &self,
-        palette: Palette,
-        locale: Locale,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        div()
-            .v_flex()
-            .w_full()
-            .flex_1()
-            .min_h_0()
-            .pr_4()
-            .overflow_y_scrollbar()
-            .gap_4()
-            .when(self.instances.profiles().is_empty(), |this| {
-                this.child(
-                    div().v_flex().items_start().gap_3().p_6()
-                        .rounded(px(12.)).bg(rgb(palette.surface))
-                        .border_1().border_color(rgb(palette.border))
-                        .child(div().text_size(px(20.)).font_weight(FontWeight::BOLD)
-                            .child(locale.text("Создай первую сборку", "Create your first build")))
-                        .child(div().text_size(px(13.)).text_color(rgb(palette.muted))
-                            .child(locale.text("Выбери версию Minecraft. Здесь появятся твои сборки и кнопки запуска.", "Choose a Minecraft version. Your builds and launch controls will appear here.")))
-                        .child(UiButton::new("home-create-build")
-                            .px_4().py_3().rounded(px(8.))
-                            .bg(rgb(palette.accent)).text_color(rgb(palette.accent_foreground))
-                            .hover(|style| style.opacity(0.9))
-                            .on_click(cx.listener(|this, _, window, cx| this.open_version_picker(window, cx)))
-                            .child(locale.text("Создать сборку", "Create build"))),
-                )
-            })
-            .when(!self.instances.profiles().is_empty(), |this| {
-                this.child(self.instances_section(palette, locale, cx))
-            })
-            .into_any_element()
-    }
+    /// Active downloads and installs, shown in the sidebar above the account.
+    /// A click opens the builds page with the details.
     pub(crate) fn download_indicator(
         &self,
-        summary: crate::features::downloads::DownloadSummary,
+        summary: DownloadSummary,
+        collapsed: bool,
         palette: Palette,
         locale: Locale,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let title = format!(
-            "{} · {}",
-            locale.text("Загрузки и установка", "Downloads and installation"),
-            summary.active_count
-        );
+        let title = locale.text("Загрузки", "Downloads").to_owned();
         let detail = if summary.active_count == 1 {
-            let mut detail = summary.profile_name;
-            if let Some(total) = summary.total_bytes
-                && (summary.received > 0 || total > 0)
-            {
-                detail.push_str(&format!(
-                    " · {} / {}",
-                    format_bytes(summary.received),
-                    format_bytes(total)
-                ));
-            }
+            let mut detail = summary.profile_name.clone();
             if summary.speed_bps > 0. {
                 detail.push_str(&format!(" · {}", format_speed(summary.speed_bps)));
             }
             detail
         } else {
-            locale
-                .text(
-                    "Открыть сборки и посмотреть прогресс",
-                    "Open builds to see progress",
-                )
-                .to_owned()
+            format!(
+                "{} {}",
+                summary.active_count,
+                locale.text("активных задач", "active tasks")
+            )
         };
-        UiButton::new("global-downloads")
+        let bytes = summary.total_bytes.map(|total| {
+            format!(
+                "{} / {}",
+                format_bytes(summary.received),
+                format_bytes(total)
+            )
+        });
+        let fraction = summary
+            .total_bytes
+            .filter(|total| *total > 0)
+            .map(|total| (summary.received as f32 / total as f32).clamp(0., 1.));
+        let tooltip = [Some(title.clone()), Some(detail.clone()), bytes.clone()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let button = UiButton::new("global-downloads")
+            .cursor_pointer()
             .w_full()
             .flex_shrink_0()
-            .px_4()
-            .py_3()
             .rounded(px(10.))
             .bg(rgb(palette.surface))
             .border_1()
             .border_color(rgb(palette.border))
             .text_color(rgb(palette.foreground))
             .hover(|style| style.bg(rgb(palette.hover)))
-            .accessibility_label(format!("{title}. {detail}"))
+            .accessibility_label(tooltip.clone())
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             .on_click(
                 cx.listener(|this, _, window, cx| this.navigate_to(Page::Instances, window, cx)),
-            )
+            );
+
+        let progress_bar = |fraction: Option<f32>| {
+            div()
+                .h(px(3.))
+                .w_full()
+                .rounded(px(2.))
+                .bg(rgb(palette.control))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(fraction.unwrap_or(0.)))
+                        .bg(rgb(palette.accent)),
+                )
+        };
+
+        if collapsed {
+            return button
+                .h(px(44.))
+                .v_flex()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .px_2()
+                .child(
+                    div()
+                        .relative()
+                        .text_color(rgb(palette.accent))
+                        .child(IconName::Download)
+                        .when(summary.active_count > 1, |icon| {
+                            icon.child(
+                                div()
+                                    .absolute()
+                                    .top(px(-6.))
+                                    .right(px(-10.))
+                                    .px_1()
+                                    .rounded(px(6.))
+                                    .bg(rgb(palette.accent))
+                                    .text_size(px(9.))
+                                    .text_color(rgb(palette.accent_foreground))
+                                    .child(summary.active_count.to_string()),
+                            )
+                        }),
+                )
+                .when(fraction.is_some(), |button| {
+                    button.child(progress_bar(fraction))
+                })
+                .into_any_element();
+        }
+
+        button
+            .v_flex()
+            .gap_2()
+            .px_3()
+            .py_2()
             .child(
                 div()
                     .h_flex()
                     .w_full()
                     .items_center()
-                    .gap_3()
+                    .gap_2()
                     .child(
                         div()
                             .text_color(rgb(palette.accent))
@@ -110,68 +135,133 @@ impl LauncherApp {
                     )
                     .child(
                         div()
-                            .v_flex()
                             .flex_1()
                             .min_w_0()
-                            .items_start()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .child(title),
-                            )
-                            .child(
-                                div()
-                                    .w_full()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette.muted))
-                                    .child(detail),
-                            ),
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::BOLD)
+                            .child(title),
                     )
-                    .child(IconName::ChevronRight),
+                    .when_some(bytes, |row, bytes| {
+                        row.child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(rgb(palette.muted))
+                                .child(bytes),
+                        )
+                    }),
             )
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.muted))
+                    .child(detail),
+            )
+            .when(fraction.is_some(), |button| {
+                button.child(progress_bar(fraction))
+            })
             .into_any_element()
     }
 }
+
 impl LauncherApp {
-    pub(crate) fn home_mod_card(
+    /// A newer launcher in the sidebar: available, downloading, or installed
+    /// and waiting for a restart. A click restarts into an installed update
+    /// when nothing is running, otherwise opens the settings with the details.
+    pub(crate) fn update_indicator(
         &self,
-        sample: &ModSample,
+        collapsed: bool,
         palette: Palette,
         locale: Locale,
-    ) -> AnyElement {
-        div()
-            .v_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_3()
-            .p_3()
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        use crate::features::updates::UpdateStatus;
+
+        let updater = self.updater.read(cx);
+        let restart =
+            matches!(updater.status(), UpdateStatus::Ready { .. }) && updater.can_restart(cx);
+        let label = match updater.status() {
+            UpdateStatus::Available(release) => format!(
+                "{} {}",
+                locale.text("Доступна версия", "Version available:"),
+                release.version
+            ),
+            UpdateStatus::Downloading { version, transfer } => {
+                let progress = transfer.progress();
+                let percent = progress
+                    .total
+                    .filter(|total| *total > 0)
+                    .map(|total| progress.received * 100 / total)
+                    .unwrap_or(0);
+                format!(
+                    "{} {version} · {percent}%",
+                    locale.text("Обновление", "Updating to")
+                )
+            }
+            UpdateStatus::Ready { version, .. } if restart => format!(
+                "{} {version}",
+                locale.text("Перезапустить в", "Restart into")
+            ),
+            UpdateStatus::Ready { version, .. } => format!(
+                "{} {version} {}",
+                locale.text("Версия", "Version"),
+                locale.text("ждёт перезапуска", "waits for a restart")
+            ),
+            _ => return None,
+        };
+
+        let button = UiButton::new("sidebar-update")
+            .cursor_pointer()
+            .w_full()
+            .flex_shrink_0()
             .rounded(px(10.))
             .bg(rgb(palette.surface))
             .border_1()
-            .border_color(rgb(palette.border))
-            .child(mod_thumbnail(sample, px(34.)))
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(palette.foreground))
-                            .child(sample.name),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(rgb(palette.muted))
-                            .child(locale.text("от ", "by "))
-                            .child(sample.author),
-                    ),
-            )
-            .into_any_element()
+            .border_color(rgb(palette.accent))
+            .text_color(rgb(palette.foreground))
+            .hover(|style| style.bg(rgb(palette.hover)))
+            .accessibility_label(label.clone())
+            .tooltip({
+                let label = label.clone();
+                move |window, cx| Tooltip::new(label.clone()).build(window, cx)
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if restart {
+                    this.updater.update(cx, |updater, cx| updater.restart(cx));
+                } else {
+                    this.navigate_to(Page::Settings, window, cx);
+                }
+            }));
+        let icon = div()
+            .text_color(rgb(palette.accent))
+            .child(IconName::Download);
+        Some(if collapsed {
+            button
+                .h(px(44.))
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .child(icon)
+                .into_any_element()
+        } else {
+            button
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_2()
+                .child(icon)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::BOLD)
+                        .child(label),
+                )
+                .into_any_element()
+        })
     }
 }

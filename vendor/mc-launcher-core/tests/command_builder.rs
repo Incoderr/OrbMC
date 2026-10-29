@@ -40,18 +40,28 @@ fn builds_basic_modern_launch_command() {
         .args
         .contains(&"net.minecraft.client.main.Main".to_string()));
     assert!(command.args.contains(&"Steve".to_string()));
+    // Maven artifact paths are built with `PathBuf::push`, so the separators
+    // follow the host platform.
+    let expected_library = format!(
+        concat!(
+            "libraries{sep}com{sep}example{sep}demo{sep}",
+            "1.0{sep}demo-1.0.jar"
+        ),
+        sep = std::path::MAIN_SEPARATOR
+    );
     assert!(command
         .args
         .iter()
-        .any(|arg| arg.contains("libraries/com/example/demo/1.0/demo-1.0.jar")));
+        .any(|arg| arg.contains(expected_library.as_str())));
     assert_eq!(
         command.working_dir,
         PathBuf::from("/tmp/mc/versions/1.20.4")
     );
+    let expected_game_dir = command.working_dir.to_string_lossy().to_string();
     assert!(command
         .args
         .windows(2)
-        .any(|window| window == ["--gameDir", "/tmp/mc/versions/1.20.4"]));
+        .any(|window| window == ["--gameDir", expected_game_dir.as_str()]));
 }
 
 #[test]

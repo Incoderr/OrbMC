@@ -1,5 +1,5 @@
 [package]
-name = "rs-mc-launcher-core"
+name = "orbmc-core"
 version.workspace = true
 edition.workspace = true
 

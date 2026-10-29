@@ -33,9 +33,9 @@ pub fn install(window: &mut Window, view: WeakEntity<LauncherApp>, cx: &App) -> 
         if let Some(tray) = &tray
             && !tray.exit_requested()
             && let Some(view) = view.upgrade()
-            && view.read(cx).hide_to_tray()
+            && view.read(cx).hide_to_tray(cx)
         {
-            let english = view.read(cx).tray_uses_english();
+            let english = view.read(cx).tray_uses_english(cx);
             if let Err(error) = tray.hide(english) {
                 use gpui_kit::component::WindowExt;
                 tracing::error!(%error, "could not hide launcher in tray; keeping window open");

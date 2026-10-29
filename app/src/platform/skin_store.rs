@@ -18,10 +18,6 @@ pub fn save(id: uuid::Uuid, png: &[u8]) -> io::Result<()> {
     write_bytes(&path, png)
 }
 
-pub fn mod_cache_dir() -> io::Result<PathBuf> {
-    Ok(profile_store::data_directory()?.join("skin-mod-cache"))
-}
-
 pub fn write_bytes(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     // Persist the PNG with a same-directory temporary file and atomic rename.
     let parent = path

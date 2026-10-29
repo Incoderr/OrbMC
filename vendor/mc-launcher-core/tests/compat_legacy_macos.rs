@@ -326,10 +326,17 @@ fn legacy_launch_command_gets_default_jvm_arguments() {
     .unwrap();
 
     assert!(command.args.contains(&"-XstartOnFirstThread".to_string()));
+    let expected_natives = PathBuf::from("/tmp/mc")
+        .join("versions")
+        .join("1.12.2")
+        .join("natives");
     assert!(command
         .args
         .iter()
-        .any(|arg| arg.starts_with("-Djava.library.path=/tmp/mc/versions/1.12.2/natives")));
+        .any(|arg| arg.starts_with(&format!(
+            "-Djava.library.path={}",
+            expected_natives.to_string_lossy()
+        ))));
     assert!(command.args.contains(&"-cp".to_string()));
     assert!(command
         .args

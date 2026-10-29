@@ -7,46 +7,55 @@ use uuid::Uuid;
 const MAX_SKINS: usize = 10;
 const MAX_PNG_BYTES: usize = 2 * 1024 * 1024;
 
-pub use rs_mc_launcher_core::minecraft::skin::SkinModel;
+pub use orbmc_core::minecraft::skin::SkinModel;
+
+/// Stable identity of a saved skin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SkinId(Uuid);
+
+impl SkinId {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl std::fmt::Display for SkinId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SavedSkin {
-    pub id: Uuid,
+    pub id: SkinId,
     pub name: String,
     #[serde(default)]
     pub model: SkinModel,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct SkinIndex {
     skins: Vec<SavedSkin>,
-    selected: Option<Uuid>,
-    #[serde(default = "default_apply_locally")]
-    apply_locally: bool,
+    selected: Option<SkinId>,
 }
 
-fn default_apply_locally() -> bool {
-    true
-}
-impl Default for SkinIndex {
-    fn default() -> Self {
-        Self {
-            skins: Vec::new(),
-            selected: None,
-            apply_locally: true,
-        }
-    }
-}
+mod view;
 
-pub mod local;
+pub use view::SkinsView;
 
 #[derive(Debug, Default)]
 pub struct SkinState {
     index: SkinIndex,
     error: Option<String>,
-    thumbnails: std::collections::HashMap<Uuid, Arc<RenderImage>>,
-    textures: std::collections::HashMap<Uuid, Arc<image::RgbaImage>>,
-    selected_preview: Option<(Uuid, i16, SkinModel, Arc<RenderImage>)>,
+    thumbnails: std::collections::HashMap<SkinId, Arc<RenderImage>>,
+    textures: std::collections::HashMap<SkinId, Arc<image::RgbaImage>>,
+    selected_preview: Option<(SkinId, i16, SkinModel, Arc<RenderImage>)>,
     /// Face crop of the selected skin for the sidebar account block.
     head: Option<Arc<RenderImage>>,
 }
@@ -58,7 +67,8 @@ impl SkinState {
             Ok(mut index) => {
                 index.skins.truncate(MAX_SKINS);
                 index.skins.retain(|skin| {
-                    crate::platform::skin_store::path(skin.id).is_ok_and(|path| path.is_file())
+                    crate::platform::skin_store::path(skin.id.uuid())
+                        .is_ok_and(|path| path.is_file())
                 });
                 if !index
                     .selected
@@ -79,7 +89,7 @@ impl SkinState {
     pub fn skins(&self) -> &[SavedSkin] {
         &self.index.skins
     }
-    pub fn selected(&self) -> Option<Uuid> {
+    pub fn selected(&self) -> Option<SkinId> {
         self.index.selected
     }
     pub fn selected_skin(&self) -> Option<&SavedSkin> {
@@ -97,20 +107,7 @@ impl SkinState {
         MAX_SKINS
     }
 
-    pub fn apply_locally(&self) -> bool {
-        self.index.apply_locally
-    }
-    pub fn set_apply_locally(&mut self, enabled: bool) -> Result<(), String> {
-        let before = self.index.apply_locally;
-        self.index.apply_locally = enabled;
-        if let Err(error) = self.persist() {
-            self.index.apply_locally = before;
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    pub fn select(&mut self, id: Uuid) -> Result<(), String> {
+    pub fn select(&mut self, id: SkinId) -> Result<(), String> {
         let previous = self.index.selected;
         if !self.index.skins.iter().any(|skin| skin.id == id) {
             return Err("Скин уже удалён".into());
@@ -131,7 +128,7 @@ impl SkinState {
         png: &[u8],
         model: SkinModel,
         locale: super::settings::Locale,
-    ) -> Result<Uuid, String> {
+    ) -> Result<SkinId, String> {
         if let Some(error) = self.error.as_ref() {
             return Err(error.clone());
         }
@@ -162,8 +159,8 @@ impl SkinState {
         } else {
             name.trim()
         };
-        let id = Uuid::new_v4();
-        crate::platform::skin_store::save(id, png)
+        let id = SkinId::new();
+        crate::platform::skin_store::save(id.uuid(), png)
             .map_err(|error| format!("Не удалось сохранить скин: {error}"))?;
         self.index.skins.push(SavedSkin {
             id,
@@ -176,14 +173,14 @@ impl SkinState {
         if let Err(error) = self.persist() {
             self.index.skins.retain(|skin| skin.id != id);
             self.index.selected = self.index.skins.first().map(|skin| skin.id);
-            let _ = crate::platform::skin_store::remove(id);
+            let _ = crate::platform::skin_store::remove(id.uuid());
             return Err(error);
         }
         self.refresh_head();
         Ok(id)
     }
 
-    pub fn remove(&mut self, id: Uuid) -> Result<(), String> {
+    pub fn remove(&mut self, id: SkinId) -> Result<(), String> {
         let before = self.index.clone();
         self.index.skins.retain(|skin| skin.id != id);
         self.thumbnails.remove(&id);
@@ -197,11 +194,11 @@ impl SkinState {
             return Err(error);
         }
         self.refresh_head();
-        crate::platform::skin_store::remove(id)
+        crate::platform::skin_store::remove(id.uuid())
             .map_err(|error| format!("Скин удалён из списка, но файл не удалось очистить: {error}"))
     }
 
-    pub fn thumbnail(&self, id: Uuid) -> Option<Arc<RenderImage>> {
+    pub fn thumbnail(&self, id: SkinId) -> Option<Arc<RenderImage>> {
         self.thumbnails.get(&id).cloned()
     }
 
@@ -217,7 +214,7 @@ impl SkinState {
             })
     }
 
-    pub fn selected_preview_ready(&self, id: Uuid, degree: i16, model: SkinModel) -> bool {
+    pub fn selected_preview_ready(&self, id: SkinId, degree: i16, model: SkinModel) -> bool {
         self.selected_preview
             .as_ref()
             .is_some_and(|(cached_id, cached_degree, cached_model, _)| {
@@ -225,7 +222,7 @@ impl SkinState {
             })
     }
 
-    pub fn texture(&self, id: Uuid) -> Option<Arc<image::RgbaImage>> {
+    pub fn texture(&self, id: SkinId) -> Option<Arc<image::RgbaImage>> {
         self.textures.get(&id).cloned()
     }
 
@@ -241,7 +238,7 @@ impl SkinState {
             let texture = match self.textures.get(&skin.id) {
                 Some(texture) => texture.clone(),
                 None => {
-                    let bytes = crate::platform::skin_store::load(skin.id).ok()?;
+                    let bytes = crate::platform::skin_store::load(skin.id.uuid()).ok()?;
                     Arc::new(decode_skin(&bytes).ok()?)
                 }
             };
@@ -251,7 +248,7 @@ impl SkinState {
 
     pub fn cache_thumbnail(
         &mut self,
-        id: Uuid,
+        id: SkinId,
         model: SkinModel,
         texture: Arc<image::RgbaImage>,
         frame: Arc<RenderImage>,
@@ -274,8 +271,7 @@ impl SkinState {
         width: u32,
         height: u32,
     ) -> Arc<RenderImage> {
-        let mut buffer =
-            rs_mc_launcher_core::minecraft::skin::render(texture, model, yaw, width, height);
+        let mut buffer = orbmc_core::minecraft::skin::render(texture, model, yaw, width, height);
         for pixel in buffer.pixels_mut() {
             pixel.0.swap(0, 2);
         }
@@ -283,10 +279,10 @@ impl SkinState {
     }
 
     pub fn render_skin_thumbnail(
-        id: Uuid,
+        id: SkinId,
         model: SkinModel,
     ) -> Result<(Arc<image::RgbaImage>, Arc<RenderImage>), String> {
-        let bytes = crate::platform::skin_store::load(id)
+        let bytes = crate::platform::skin_store::load(id.uuid())
             .map_err(|error| format!("Не удалось открыть PNG: {error}"))?;
         let texture = Arc::new(decode_skin(&bytes)?);
         let frame = Self::render_frame(&texture, model, -0.24, 96, 144);
@@ -295,7 +291,7 @@ impl SkinState {
 
     pub fn cache_selected_preview(
         &mut self,
-        id: Uuid,
+        id: SkinId,
         degree: i16,
         model: SkinModel,
         frame: Arc<RenderImage>,
@@ -315,7 +311,7 @@ impl SkinState {
         self.selected_skin().map(|skin| skin.model)
     }
 
-    pub fn update_model(&mut self, id: Uuid, model: SkinModel) -> Result<(), String> {
+    pub fn update_model(&mut self, id: SkinId, model: SkinModel) -> Result<(), String> {
         let skin = self
             .index
             .skins
@@ -335,7 +331,7 @@ impl SkinState {
         Ok(())
     }
 
-    pub fn set_model(&mut self, id: Uuid, model: SkinModel) -> Result<(), String> {
+    pub fn set_model(&mut self, id: SkinId, model: SkinModel) -> Result<(), String> {
         self.update_model(id, model)
     }
 
@@ -394,7 +390,7 @@ mod tests {
     use super::*;
     #[test]
     fn completed_frames_are_presented_during_rotation_and_models_do_not_mix() {
-        let id = Uuid::new_v4();
+        let id = SkinId::new();
         let mut state = SkinState::default();
         state.index.skins.push(SavedSkin {
             id,
@@ -423,8 +419,9 @@ mod tests {
         assert!(state.selected_preview().is_none());
     }
     #[test]
-    fn old_skin_libraries_default_to_local_use() {
-        let index: SkinIndex = serde_json::from_str(r#"{"skins":[],"selected":null}"#).unwrap();
-        assert!(index.apply_locally);
+    fn libraries_saved_with_the_local_skin_switch_still_load() {
+        let index: SkinIndex =
+            serde_json::from_str(r#"{"skins":[],"selected":null,"apply_locally":true}"#).unwrap();
+        assert!(index.skins.is_empty());
     }
 }

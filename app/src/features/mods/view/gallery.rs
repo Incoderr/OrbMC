@@ -1,12 +1,11 @@
-use crate::app::LauncherApp;
-use crate::app::theme::Palette;
+use super::CatalogView;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::WindowExt;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-impl LauncherApp {
+impl CatalogView {
     /// Opens the fullscreen viewer for gallery screenshot `index`.
     ///
     /// Navigation reopens the dialog with the new index; the shared
@@ -39,8 +38,8 @@ impl LauncherApp {
             .selected_mod()
             .map(|project| project.name.clone())
             .unwrap_or_default();
-        let palette = Palette::for_settings(self.settings.theme(), self.settings.accent());
-        let locale = self.settings.locale();
+        let palette = self.palette;
+        let locale = self.locale;
         let owner = cx.entity().downgrade();
 
         let title = format!("{project_name} · {}/{gallery_len}", index + 1);
@@ -95,6 +94,7 @@ impl LauncherApp {
                         .gap_2()
                         .child(
                             UiButton::new("gallery-dialog-prev")
+                                .cursor_pointer()
                                 .px_3()
                                 .py_2()
                                 .rounded(px(7.))
@@ -125,6 +125,7 @@ impl LauncherApp {
                         )
                         .child(
                             UiButton::new("gallery-dialog-next")
+                                .cursor_pointer()
                                 .px_3()
                                 .py_2()
                                 .rounded(px(7.))

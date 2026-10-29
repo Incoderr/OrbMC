@@ -3,9 +3,10 @@ use std::cell::Cell;
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
+        System::LibraryLoader::GetModuleHandleW,
         UI::{Shell::*, WindowsAndMessaging::*},
     },
-    core::w,
+    core::{PCWSTR, w},
 };
 
 const CALLBACK: u32 = WM_APP + 71;
@@ -23,6 +24,19 @@ struct State {
     exit: Cell<bool>,
     english: Cell<bool>,
     taskbar_created: u32,
+    /// Sent by a second launcher start to bring this one forward.
+    activate: u32,
+}
+
+/// The icon embedded by build.rs (resource id 1), or the stock icon when it is missing.
+fn application_icon() -> windows::core::Result<HICON> {
+    unsafe {
+        let module = GetModuleHandleW(None)?;
+        match LoadIconW(Some(module.into()), PCWSTR(std::ptr::without_provenance(1))) {
+            Ok(icon) => Ok(icon),
+            Err(_) => LoadIconW(None, IDI_APPLICATION),
+        }
+    }
 }
 
 impl Tray {
@@ -36,14 +50,10 @@ impl Tray {
                 uID: 1,
                 uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
                 uCallbackMessage: CALLBACK,
-                hIcon: LoadIconW(None, IDI_APPLICATION)?,
+                hIcon: application_icon()?,
                 ..Default::default()
             };
-            for (slot, ch) in icon
-                .szTip
-                .iter_mut()
-                .zip("Minecraft Launcher".encode_utf16())
-            {
+            for (slot, ch) in icon.szTip.iter_mut().zip("OrbMC".encode_utf16()) {
                 *slot = ch;
             }
             let state = Box::new(State {
@@ -53,6 +63,7 @@ impl Tray {
                 exit: Cell::new(false),
                 english: Cell::new(false),
                 taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
+                activate: super::single_instance::activate_message(),
             });
             SetWindowSubclass(
                 hwnd,
@@ -175,6 +186,10 @@ unsafe extern "system" fn callback(
                 }
                 _ => {}
             }
+            return LRESULT(0);
+        }
+        if message == state.activate {
+            state.restore();
             return LRESULT(0);
         }
         if message == state.taskbar_created

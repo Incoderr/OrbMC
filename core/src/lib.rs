@@ -1,3 +1,3 @@
-pub const APPLICATION_NAME: &str = "RS MC Launcher";
+pub const APPLICATION_NAME: &str = "OrbMC";
 
 pub mod minecraft;

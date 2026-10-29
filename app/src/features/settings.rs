@@ -1,110 +1,61 @@
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use super::instances::{OFFLINE_PLAYER_NAME, is_valid_player_name};
+use crate::platform::profile_store;
+pub use crate::shared::locale::Locale;
+use crate::shared::theme::Palette;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Locale {
-    #[default]
-    Ru,
-    En,
+mod page;
+mod view;
+
+pub use crate::shared::theme::{AccentColor, ThemeChoice};
+pub use view::SettingsView;
+
+/// Reads a saved custom accent such as `custom:#3a7bd5`.
+fn parse_custom_accent(value: &str) -> Option<AccentColor> {
+    let hex = value.strip_prefix("custom:#")?;
+    (hex.len() == 6)
+        .then(|| u32::from_str_radix(hex, 16).ok())
+        .flatten()
+        .map(AccentColor::Custom)
 }
 
-impl Locale {
-    pub fn tag(self) -> &'static str {
-        match self {
-            Self::Ru => "ru",
-            Self::En => "en",
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Ru => "Русский",
-            Self::En => "English",
-        }
-    }
-
-    pub fn text(self, russian: &'static str, english: &'static str) -> &'static str {
-        match self {
-            Self::Ru => russian,
-            Self::En => english,
-        }
-    }
+/// Persisted form of the launcher settings (`settings.json`).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SavedLauncherSettings {
+    pub download_directory: PathBuf,
+    pub locale: String,
+    pub theme: String,
+    pub accent: String,
+    pub hide_to_tray: bool,
+    pub offline_player: String,
+    pub discord_presence: bool,
+    /// Whether catalog descriptions are machine-translated (Google Translate).
+    pub translate_descriptions: bool,
+    /// Whether launcher updates are downloaded and installed by themselves.
+    pub auto_update: bool,
+    /// Whether the navigation sidebar was left collapsed.
+    pub sidebar_collapsed: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AccentColor {
-    #[default]
-    Orange,
-    Red,
-    Blue,
-    Green,
-    Purple,
-    Pink,
-}
-
-impl AccentColor {
-    pub const ALL: [Self; 6] = [
-        Self::Orange,
-        Self::Red,
-        Self::Blue,
-        Self::Green,
-        Self::Purple,
-        Self::Pink,
-    ];
-
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::Orange => "accent-orange",
-            Self::Red => "accent-red",
-            Self::Blue => "accent-blue",
-            Self::Green => "accent-green",
-            Self::Purple => "accent-purple",
-            Self::Pink => "accent-pink",
+impl Default for SavedLauncherSettings {
+    fn default() -> Self {
+        Self {
+            download_directory: PathBuf::new(),
+            locale: "ru".to_owned(),
+            theme: "dark".to_owned(),
+            accent: "orange".to_owned(),
+            hide_to_tray: false,
+            offline_player: OFFLINE_PLAYER_NAME.to_owned(),
+            discord_presence: true,
+            translate_descriptions: true,
+            auto_update: true,
+            sidebar_collapsed: false,
         }
     }
-
-    pub fn name(self, locale: Locale) -> &'static str {
-        match self {
-            Self::Orange => locale.text("Оранжевый", "Orange"),
-            Self::Red => locale.text("Красный", "Red"),
-            Self::Blue => locale.text("Синий", "Blue"),
-            Self::Green => locale.text("Зелёный", "Green"),
-            Self::Purple => locale.text("Фиолетовый", "Purple"),
-            Self::Pink => locale.text("Розовый", "Pink"),
-        }
-    }
-
-    pub fn color(self, theme: ThemeChoice) -> u32 {
-        match (self, theme) {
-            (Self::Orange, ThemeChoice::Dark) => 0xff7a1a,
-            (Self::Orange, ThemeChoice::Light) => 0xe96a12,
-            (Self::Red, ThemeChoice::Dark) => 0xff515b,
-            (Self::Red, ThemeChoice::Light) => 0xdc3545,
-            (Self::Blue, ThemeChoice::Dark) => 0x448aff,
-            (Self::Blue, ThemeChoice::Light) => 0x2563eb,
-            (Self::Green, ThemeChoice::Dark) => 0x39c975,
-            (Self::Green, ThemeChoice::Light) => 0x168a4a,
-            (Self::Purple, ThemeChoice::Dark) => 0xa78bfa,
-            (Self::Purple, ThemeChoice::Light) => 0x7c3aed,
-            (Self::Pink, ThemeChoice::Dark) => 0xf472b6,
-            (Self::Pink, ThemeChoice::Light) => 0xdb2777,
-        }
-    }
-
-    pub fn foreground(self, theme: ThemeChoice) -> u32 {
-        match (self, theme) {
-            (Self::Orange, _) | (_, ThemeChoice::Dark) => 0x17120e,
-            (_, ThemeChoice::Light) => 0xffffff,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ThemeChoice {
-    #[default]
-    Dark,
-    Light,
 }
 
 #[derive(Debug, Default)]
@@ -117,9 +68,109 @@ pub struct SettingsState {
     offline_player: String,
     /// Whether game launches update the Discord status.
     discord_presence: bool,
+    translate_descriptions: bool,
+    auto_update: bool,
+    sidebar_collapsed: bool,
 }
 
 impl SettingsState {
+    /// Reads `settings.json`; missing or broken values fall back to defaults.
+    pub fn load() -> Self {
+        let mut saved =
+            profile_store::load_settings::<SavedLauncherSettings>().unwrap_or_else(|error| {
+                tracing::warn!(%error, "failed to load launcher settings");
+                SavedLauncherSettings::default()
+            });
+        if saved.download_directory.as_os_str().is_empty() {
+            match profile_store::default_download_directory() {
+                Ok(path) => saved.download_directory = path,
+                Err(error) => {
+                    tracing::warn!(%error, "launcher default download directory is unavailable")
+                }
+            }
+        }
+        if let Some(relocated) = profile_store::relocate_legacy_path(&saved.download_directory) {
+            saved.download_directory = relocated;
+        }
+
+        let mut settings = Self {
+            download_directory: saved.download_directory,
+            locale: match saved.locale.as_str() {
+                "en" => Locale::En,
+                _ => Locale::Ru,
+            },
+            theme: match saved.theme.as_str() {
+                "light" => ThemeChoice::Light,
+                _ => ThemeChoice::Dark,
+            },
+            accent: match saved.accent.as_str() {
+                "red" => AccentColor::Red,
+                "blue" => AccentColor::Blue,
+                "green" => AccentColor::Green,
+                "purple" => AccentColor::Purple,
+                "pink" => AccentColor::Pink,
+                custom => parse_custom_accent(custom).unwrap_or_default(),
+            },
+            hide_to_tray: saved.hide_to_tray,
+            discord_presence: saved.discord_presence,
+            translate_descriptions: saved.translate_descriptions,
+            auto_update: saved.auto_update,
+            sidebar_collapsed: saved.sidebar_collapsed,
+            offline_player: String::new(),
+        };
+        if is_valid_player_name(&saved.offline_player) {
+            settings.set_offline_player(saved.offline_player);
+        } else {
+            settings.reset_offline_player();
+        }
+        settings
+    }
+
+    /// Writes `settings.json`; failures are logged, the state stays.
+    pub fn save(&self) {
+        let accent = match self.accent {
+            AccentColor::Orange => "orange".to_owned(),
+            AccentColor::Red => "red".to_owned(),
+            AccentColor::Blue => "blue".to_owned(),
+            AccentColor::Green => "green".to_owned(),
+            AccentColor::Purple => "purple".to_owned(),
+            AccentColor::Pink => "pink".to_owned(),
+            AccentColor::Custom(color) => format!("custom:#{color:06x}"),
+        };
+        let saved = SavedLauncherSettings {
+            download_directory: self.download_directory.clone(),
+            locale: self.locale.tag().to_owned(),
+            theme: match self.theme {
+                ThemeChoice::Dark => "dark",
+                ThemeChoice::Light => "light",
+            }
+            .to_owned(),
+            accent,
+            hide_to_tray: self.hide_to_tray,
+            offline_player: self.offline_player.clone(),
+            discord_presence: self.discord_presence,
+            translate_descriptions: self.translate_descriptions,
+            auto_update: self.auto_update,
+            sidebar_collapsed: self.sidebar_collapsed,
+        };
+        if let Err(error) = profile_store::save_settings(&saved) {
+            tracing::error!(%error, "failed to persist launcher settings");
+        }
+    }
+
+    /// Colours of the chosen theme and accent.
+    pub fn palette(&self) -> Palette {
+        Palette::for_settings(self.theme, self.accent)
+    }
+
+    pub fn sidebar_collapsed(&self) -> bool {
+        self.sidebar_collapsed
+    }
+
+    pub fn toggle_sidebar(&mut self) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+    }
+
     pub fn locale(&self) -> Locale {
         self.locale
     }
@@ -148,6 +199,23 @@ impl SettingsState {
     /// Whether game launches update the Discord status.
     pub fn discord_presence(&self) -> bool {
         self.discord_presence
+    }
+
+    /// Whether catalog descriptions are machine-translated.
+    pub fn translate_descriptions(&self) -> bool {
+        self.translate_descriptions
+    }
+
+    pub fn set_translate_descriptions(&mut self, enabled: bool) {
+        self.translate_descriptions = enabled;
+    }
+
+    pub fn auto_update(&self) -> bool {
+        self.auto_update
+    }
+
+    pub fn set_auto_update(&mut self, enabled: bool) {
+        self.auto_update = enabled;
     }
 
     pub fn set_discord_presence(&mut self, enabled: bool) {

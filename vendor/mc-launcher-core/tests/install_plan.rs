@@ -19,7 +19,7 @@ fn plans_client_library_and_asset_index_downloads() {
     let destinations = plan
         .tasks
         .iter()
-        .map(|task| task.destination.to_string_lossy().to_string())
+        .map(|task| task.destination.to_string_lossy().replace('\\', "/"))
         .collect::<Vec<_>>();
 
     assert!(destinations

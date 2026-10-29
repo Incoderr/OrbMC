@@ -1,37 +1,36 @@
-use crate::app::LauncherApp;
-use crate::app::theme::Palette;
-use crate::app::ui::*;
+use super::{CatalogEvent, CatalogView};
 use crate::features::mods::ProjectKind;
 use crate::features::mods::catalog::*;
+use crate::features::versions::loader_title;
 use crate::features::versions::*;
-use crate::router::Page;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::*;
 
-impl LauncherApp {
+impl CatalogView {
     pub(crate) fn open_project_install_dialog(
         &mut self,
         project: ModProject,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if project.kind == ProjectKind::Mod {
-            if let Some(id) = self.mods.target_profile() {
-                self.start_mod_download(project, id, cx);
-                return;
-            }
+        if project.kind == ProjectKind::Mod
+            && let Some(id) = self.mods.target_profile()
+        {
+            self.start_mod_download(project, id, cx);
+            return;
         }
-        let locale = self.settings.locale();
-        let palette = Palette::for_settings(self.settings.theme(), self.settings.accent());
+        let locale = self.locale;
+        let palette = self.palette;
         let is_mod = project.kind == ProjectKind::Mod;
         let profiles = self
             .instances
+            .read(cx)
             .profiles()
             .iter()
             .map(|profile| {
-                let runtime = self.instances.runtime(&profile.id);
+                let runtime = self.instances.read(cx).runtime(&profile.id);
                 let installed = is_mod && self.mods.installed.contains(profile.id, &project.id);
                 let busy = runtime.is_busy()
                     || self.mods.installed.is_installing(&project.id)
@@ -72,7 +71,7 @@ impl LauncherApp {
                                     "Create a build first, then choose it as the content destination.",
                                 ))
                                 .child(
-                                    UiButton::new("mod-download-create-build")
+                                    UiButton::new("mod-download-create-build").cursor_pointer()
                                         .px_3()
                                         .py_2()
                                         .rounded(px(8.))
@@ -81,8 +80,8 @@ impl LauncherApp {
                                         .on_click(move |_, window, cx| {
                                             window.close_dialog(cx);
                                             if let Some(owner) = create_owner.upgrade() {
-                                                let _ = owner.update(cx, |this, cx| {
-                                                    this.navigate_to(Page::Instances, window, cx);
+                                                owner.update(cx, |_, cx| {
+                                                    cx.emit(CatalogEvent::OpenBuilds);
                                                 });
                                             }
                                         })
@@ -123,7 +122,7 @@ impl LauncherApp {
                             };
                             let select_owner = content_owner.clone();
                             let selected_project = project.clone();
-                            UiButton::new(format!("download-project-to-{profile_id}"))
+                            UiButton::new(format!("download-project-to-{profile_id}")).cursor_pointer()
                                 .w_full()
                                 .px_3()
                                 .py_3()
@@ -135,7 +134,7 @@ impl LauncherApp {
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     if let Some(owner) = select_owner.upgrade() {
-                                        let _ = owner.update(cx, |this, cx| {
+                                        owner.update(cx, |this, cx| {
                                             if selected_project.kind == ProjectKind::Mod {
                                                 this.start_mod_download(
                                                     selected_project.clone(),

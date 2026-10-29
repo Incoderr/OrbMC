@@ -1,16 +1,68 @@
-use super::theme::Palette;
-use super::*;
-use crate::features::skins::SkinModel;
-use gpui_kit::component::switch::Switch;
-use gpui_kit::{MouseDownEvent, MouseMoveEvent, RenderImage};
+//! Skins page: the saved-skin gallery, the rotatable preview and the local
+//! skin switch. Owns its view state; the app only embeds the entity.
+
+use std::collections::HashSet;
 use std::sync::Arc;
 
-impl LauncherApp {
-    pub(super) fn import_skin(&mut self, cx: &mut Context<Self>) {
+use gpui_kit::assets::IconName;
+use gpui_kit::base::{Button as UiButton, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
+use gpui_kit::{MouseDownEvent, MouseMoveEvent, RenderImage};
+
+use super::{SkinId, SkinModel, SkinState};
+use crate::features::settings::SettingsState;
+use crate::shared::locale::Locale;
+use crate::shared::theme::Palette;
+
+pub struct SkinsView {
+    skins: SkinState,
+    yaw: f32,
+    dragging: bool,
+    last_x: f32,
+    preview_request: Option<(SkinId, i16, SkinModel)>,
+    thumbnails_pending: HashSet<(SkinId, SkinModel)>,
+    message: Option<String>,
+    palette: Palette,
+    locale: Locale,
+    _settings_observer: Subscription,
+}
+
+impl SkinsView {
+    pub fn new(settings: &Entity<SettingsState>, cx: &mut Context<Self>) -> Self {
+        let (palette, locale) = {
+            let settings = settings.read(cx);
+            (settings.palette(), settings.locale())
+        };
+        let settings_observer = cx.observe(settings, |this, settings, cx| {
+            let settings = settings.read(cx);
+            this.palette = settings.palette();
+            this.locale = settings.locale();
+            cx.notify();
+        });
+        Self {
+            skins: SkinState::load(),
+            yaw: -0.24,
+            dragging: false,
+            last_x: 0.0,
+            preview_request: None,
+            thumbnails_pending: HashSet::new(),
+            message: None,
+            palette,
+            locale,
+            _settings_observer: settings_observer,
+        }
+    }
+
+    /// Face of the selected skin, shown on the account button.
+    pub fn head(&self) -> Option<Arc<RenderImage>> {
+        self.skins.head()
+    }
+
+    fn import_skin(&mut self, cx: &mut Context<Self>) {
         if !self.skins.can_add() {
-            self.skin_message = Some(
-                self.settings
-                    .locale()
+            self.message = Some(
+                self.locale
                     .text(
                         "В галерее уже 10 скинов. Удали один, чтобы добавить новый.",
                         "The gallery already has 10 skins. Remove one before adding another.",
@@ -20,7 +72,7 @@ impl LauncherApp {
             cx.notify();
             return;
         }
-        let locale = self.settings.locale();
+        let locale = self.locale;
         let response = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -41,7 +93,7 @@ impl LauncherApp {
                 Ok(Err(error)) => {
                     tracing::warn!(%error, "skin picker failed");
                     let _ = this.update(cx, |this, cx| {
-                        this.skin_message = Some(error.to_string());
+                        this.message = Some(error.to_string());
                         cx.notify();
                     });
                     return;
@@ -66,19 +118,19 @@ impl LauncherApp {
                 Ok(bytes) => bytes,
                 Err(error) => {
                     let _ = this.update(cx, |this, cx| {
-                        this.skin_message = Some(error);
+                        this.message = Some(error);
                         cx.notify();
                     });
                     return;
                 }
             };
             let _ = this.update(cx, |this, cx| {
-                this.skin_message = this
+                this.message = this
                     .skins
-                    .add(&name, &bytes, SkinModel::Classic, this.settings.locale())
+                    .add(&name, &bytes, SkinModel::Classic, this.locale)
                     .err();
-                this.skin_yaw = -0.24;
-                this.skin_preview_request = None;
+                this.yaw = -0.24;
+                this.preview_request = None;
                 this.request_skin_preview(cx);
                 cx.notify();
             });
@@ -86,55 +138,46 @@ impl LauncherApp {
         .detach();
     }
 
-    pub(super) fn rotate_skin(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        if !self.skin_dragging {
+    fn rotate_skin(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if !self.dragging {
             return;
         }
         let x = event.position.x.as_f32();
-        self.skin_yaw =
-            (self.skin_yaw + (x - self.skin_last_x) * 0.012).rem_euclid(std::f32::consts::TAU);
-        self.skin_last_x = x;
+        self.yaw = (self.yaw + (x - self.last_x) * 0.012).rem_euclid(std::f32::consts::TAU);
+        self.last_x = x;
         cx.notify();
         self.request_skin_preview(cx);
     }
 
-    pub(super) fn begin_skin_drag(&mut self, event: &MouseDownEvent) {
-        self.skin_dragging = true;
-        self.skin_last_x = event.position.x.as_f32();
+    fn begin_skin_drag(&mut self, event: &MouseDownEvent) {
+        self.dragging = true;
+        self.last_x = event.position.x.as_f32();
     }
 
-    pub(super) fn request_skin_preview(&mut self, cx: &mut Context<Self>) {
+    fn request_skin_preview(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.skins.selected() else {
             return;
         };
         let Some(model) = self.skins.selected_model() else {
             return;
         };
-        let degree = (self.skin_yaw.to_degrees().round() as i16).rem_euclid(360);
+        let degree = (self.yaw.to_degrees().round() as i16).rem_euclid(360);
         // Keep one renderer active and always present a completed frame while dragging.
-        if self.skins.selected_preview_ready(id, degree, model)
-            || self.skin_preview_request.is_some()
-        {
+        if self.skins.selected_preview_ready(id, degree, model) || self.preview_request.is_some() {
             return;
         }
         let Some(texture) = self.skins.texture(id) else {
             return;
         };
-        self.skin_preview_request = Some((id, degree, model));
+        self.preview_request = Some((id, degree, model));
         let task = cx.background_executor().spawn(async move {
-            crate::features::skins::SkinState::render_frame(
-                &texture,
-                model,
-                f32::from(degree).to_radians(),
-                224,
-                384,
-            )
+            SkinState::render_frame(&texture, model, f32::from(degree).to_radians(), 224, 384)
         });
         cx.spawn(async move |this, cx| {
             let frame = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.skin_preview_request == Some((id, degree, model)) {
-                    this.skin_preview_request = None;
+                if this.preview_request == Some((id, degree, model)) {
+                    this.preview_request = None;
                     if this.skins.selected() == Some(id)
                         && this.skins.selected_model() == Some(model)
                         && let Some(previous) =
@@ -151,25 +194,25 @@ impl LauncherApp {
         .detach();
     }
 
-    fn request_skin_thumbnail(&mut self, id: uuid::Uuid, model: SkinModel, cx: &mut Context<Self>) {
-        if self.skins.thumbnail(id).is_some() || !self.skin_thumbnails_pending.insert((id, model)) {
+    fn request_skin_thumbnail(&mut self, id: SkinId, model: SkinModel, cx: &mut Context<Self>) {
+        if self.skins.thumbnail(id).is_some() || !self.thumbnails_pending.insert((id, model)) {
             return;
         }
-        let task = cx.background_executor().spawn(async move {
-            crate::features::skins::SkinState::render_skin_thumbnail(id, model)
-        });
+        let task = cx
+            .background_executor()
+            .spawn(async move { SkinState::render_skin_thumbnail(id, model) });
         cx.spawn(async move |this, cx| {
             let rendered = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.skin_thumbnails_pending.remove(&(id, model));
+                this.thumbnails_pending.remove(&(id, model));
                 match rendered {
                     Ok((texture, frame)) => {
                         this.skins.cache_thumbnail(id, model, texture, frame);
                         this.request_skin_preview(cx);
                     }
                     Err(error) => {
-                        this.skin_thumbnails_pending.insert((id, model));
-                        this.skin_message = Some(error);
+                        this.thumbnails_pending.insert((id, model));
+                        this.message = Some(error);
                     }
                 }
                 cx.notify();
@@ -179,12 +222,14 @@ impl LauncherApp {
     }
 }
 
-pub(super) fn skin_page(
-    this: &mut LauncherApp,
-    palette: Palette,
-    locale: Locale,
-    cx: &mut Context<LauncherApp>,
-) -> AnyElement {
+impl Render for SkinsView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        skin_page(self, cx)
+    }
+}
+
+fn skin_page(this: &mut SkinsView, cx: &mut Context<SkinsView>) -> AnyElement {
+    let (palette, locale) = (this.palette, this.locale);
     let selected = this.skins.selected();
     let selected_skin = this.skins.selected_skin().cloned();
     this.request_skin_preview(cx);
@@ -222,7 +267,7 @@ pub(super) fn skin_page(
         .bg(rgb(palette.surface))
         .border_1()
         .border_color(rgb(palette.border))
-        .cursor(if this.skin_dragging {
+        .cursor(if this.dragging {
             CursorStyle::ClosedHand
         } else {
             CursorStyle::OpenHand
@@ -251,14 +296,14 @@ pub(super) fn skin_page(
             cx.listener(|this, event: &MouseMoveEvent, _, cx| this.rotate_skin(event, cx)),
         )
         .on_mouse_exit(cx.listener(|this, _, _, cx| {
-            this.skin_dragging = false;
+            this.dragging = false;
             this.request_skin_preview(cx);
             cx.notify();
         }))
         .on_mouse_up(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
-                this.skin_dragging = false;
+                this.dragging = false;
                 this.request_skin_preview(cx);
                 cx.notify();
             }),
@@ -266,7 +311,7 @@ pub(super) fn skin_page(
         .on_mouse_up_out(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
-                this.skin_dragging = false;
+                this.dragging = false;
                 this.request_skin_preview(cx);
                 cx.notify();
             }),
@@ -281,6 +326,7 @@ pub(super) fn skin_page(
             .gap_2()
             .child(
                 UiButton::new("skin-model-classic")
+                    .cursor_pointer()
                     .flex_1()
                     .px_3()
                     .py_2()
@@ -297,8 +343,8 @@ pub(super) fn skin_page(
                     }))
                     .selected(classic)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.skin_message = this.skins.set_model(id, SkinModel::Classic).err();
-                        this.skin_preview_request = None;
+                        this.message = this.skins.set_model(id, SkinModel::Classic).err();
+                        this.preview_request = None;
                         this.request_skin_preview(cx);
                         cx.notify();
                     }))
@@ -306,6 +352,7 @@ pub(super) fn skin_page(
             )
             .child(
                 UiButton::new("skin-model-slim")
+                    .cursor_pointer()
                     .flex_1()
                     .px_3()
                     .py_2()
@@ -322,8 +369,8 @@ pub(super) fn skin_page(
                     }))
                     .selected(!classic)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.skin_message = this.skins.set_model(id, SkinModel::Slim).err();
-                        this.skin_preview_request = None;
+                        this.message = this.skins.set_model(id, SkinModel::Slim).err();
+                        this.preview_request = None;
                         this.request_skin_preview(cx);
                         cx.notify();
                     }))
@@ -333,6 +380,7 @@ pub(super) fn skin_page(
     let delete_button = selected_skin.as_ref().map(|skin| {
         let id = skin.id;
         UiButton::new("remove-saved-skin")
+            .cursor_pointer()
             .w_full()
             .px_3()
             .py_2()
@@ -340,7 +388,7 @@ pub(super) fn skin_page(
             .bg(rgb(palette.control))
             .text_color(rgb(0xef6a65))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.skin_message = this.skins.remove(id).err();
+                this.message = this.skins.remove(id).err();
                 cx.notify();
             }))
             .child(locale.text("Удалить из галереи", "Remove from gallery"))
@@ -351,6 +399,7 @@ pub(super) fn skin_page(
         let add = cx.listener(|this, _, _, cx| this.import_skin(cx));
         gallery.push(
             UiButton::new("add-user-skin")
+                .cursor_pointer()
                 .w(px(126.))
                 .h(px(168.))
                 .flex_shrink_0()
@@ -391,6 +440,7 @@ pub(super) fn skin_page(
         let id = skin.id;
         gallery.push(
             UiButton::new(format!("saved-skin-{id}"))
+                .cursor_pointer()
                 .w(px(126.))
                 .h(px(168.))
                 .flex_shrink_0()
@@ -413,9 +463,9 @@ pub(super) fn skin_page(
                 }))
                 .hover(|style| style.bg(rgb(palette.hover)))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.skin_message = this.skins.select(id).err();
-                    this.skin_yaw = -0.24;
-                    this.skin_preview_request = None;
+                    this.message = this.skins.select(id).err();
+                    this.yaw = -0.24;
+                    this.preview_request = None;
                     this.request_skin_preview(cx);
                     cx.notify();
                 }))
@@ -457,33 +507,81 @@ pub(super) fn skin_page(
     }
 
     let count = format!("{} / {}", this.skins.skins().len(), this.skins.max_skins());
-    let local_enabled = this.skins.apply_locally();
-    let local_switch = Switch::new("skin-apply-locally")
-        .checked(local_enabled)
-        .color(rgb(palette.accent))
-        .on_change(cx.listener(|this, checked, _, cx| {
-            this.skin_message = this.skins.set_apply_locally(*checked).err();
-            cx.notify();
-        }));
-    div().h_flex().items_stretch().w_full().flex_1().min_h_0().gap_4()
-        .child(div().id("skin-preview-column").v_flex().w(px(300.)).flex_shrink_0().h_full().min_h_0().gap_3()
-            .child(div().text_size(px(15.)).font_weight(FontWeight::BOLD).child(locale.text("Выбранный скин", "Selected skin")))
-            .child(preview_window)
-            .child(div().text_size(px(11.)).text_color(rgb(palette.muted)).text_center().child(locale.text("Зажми и веди мышью, чтобы вращать", "Drag to rotate")))
-            .when_some(model_controls, |column, controls| column.child(controls))
-            .when_some(delete_button, |column, button| column.child(button)))
-        .child(div().v_flex().flex_1().h_full().min_w_0().min_h_0().gap_4()
-            .child(saved_skin_header(count, palette, locale))
-            .child(div().id("saved-skins-scroll").v_flex().w_full().flex_1().min_h_0().overflow_y_scroll().gap_4()
-                .child(saved_skin_grid(gallery))
-                .child(div().h_flex().w_full().gap_3().justify_between().p_3().rounded(px(8.)).bg(rgb(palette.surface))
-                    .child(div().v_flex().flex_1().min_w_0().gap_1()
-                        .child(div().text_size(px(12.)).child(locale.text("Использовать в игре локально", "Use locally in game")))
-                        .child(div().text_size(px(10.)).text_color(rgb(palette.muted)).child(locale.text("Виден только тебе · применяется при следующем запуске", "Visible only to you · applied on the next launch"))))
-                    .child(local_switch))
-                .child(div().text_size(px(11.)).text_color(rgb(palette.muted)).child(locale.text("Для локального скина нужна сборка с Forge, Fabric или NeoForge. Мод скинов установится при запуске.", "Local skins require Forge, Fabric or NeoForge. The skin mod is installed when launching.")))
-                .when_some(this.skin_message.as_ref(), |column, message| column.child(div().p_3().rounded(px(8.)).bg(rgb(palette.control)).text_size(px(12.)).text_color(rgb(0xef8580)).child(message.clone())))
-                .when_some(this.skins.error(), |column, message| column.child(div().p_3().rounded(px(8.)).text_size(px(12.)).text_color(rgb(0xef8580)).child(message.to_owned())))))
+    div()
+        .h_flex()
+        .items_stretch()
+        .w_full()
+        .flex_1()
+        .min_h_0()
+        .gap_4()
+        .child(
+            div()
+                .id("skin-preview-column")
+                .v_flex()
+                .w(px(300.))
+                .flex_shrink_0()
+                .h_full()
+                .min_h_0()
+                .gap_3()
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .font_weight(FontWeight::BOLD)
+                        .child(locale.text("Выбранный скин", "Selected skin")),
+                )
+                .child(preview_window)
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette.muted))
+                        .text_center()
+                        .child(locale.text("Зажми и веди мышью, чтобы вращать", "Drag to rotate")),
+                )
+                .when_some(model_controls, |column, controls| column.child(controls))
+                .when_some(delete_button, |column, button| column.child(button)),
+        )
+        .child(
+            div()
+                .v_flex()
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .min_h_0()
+                .gap_4()
+                .child(saved_skin_header(count, palette, locale))
+                .child(
+                    div()
+                        .id("saved-skins-scroll")
+                        .v_flex()
+                        .w_full()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .gap_4()
+                        .child(saved_skin_grid(gallery))
+                        .when_some(this.message.as_ref(), |column, message| {
+                            column.child(
+                                div()
+                                    .p_3()
+                                    .rounded(px(8.))
+                                    .bg(rgb(palette.control))
+                                    .text_size(px(12.))
+                                    .text_color(rgb(0xef8580))
+                                    .child(message.clone()),
+                            )
+                        })
+                        .when_some(this.skins.error(), |column, message| {
+                            column.child(
+                                div()
+                                    .p_3()
+                                    .rounded(px(8.))
+                                    .text_size(px(12.))
+                                    .text_color(rgb(0xef8580))
+                                    .child(message.to_owned()),
+                            )
+                        }),
+                ),
+        )
         .into_any_element()
 }
 
@@ -529,6 +627,7 @@ fn saved_skin_grid(gallery: Vec<AnyElement>) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::theme::{AccentColor, ThemeChoice};
     use core::prelude::v1::test;
     struct GalleryLayout;
     impl Render for GalleryLayout {

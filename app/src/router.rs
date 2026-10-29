@@ -6,7 +6,7 @@ pub enum Page {
     Home,
     Instances,
     /// Detail page of one build: installed mods with enable/disable.
-    InstanceDetails(uuid::Uuid),
+    InstanceDetails(crate::features::instances::InstanceId),
     Modpacks,
     Mods,
     ResourcePacks,
@@ -39,6 +39,15 @@ impl Page {
             Self::Settings => locale.text("Настройки", "Settings"),
             Self::Skins => locale.text("Скины", "Skins"),
             Self::ModDetails => locale.text("Проект", "Project"),
+        }
+    }
+
+    pub fn for_catalog_kind(kind: ProjectKind) -> Self {
+        match kind {
+            ProjectKind::Mod => Self::Mods,
+            ProjectKind::Modpack => Self::Modpacks,
+            ProjectKind::ResourcePack => Self::ResourcePacks,
+            ProjectKind::Shader => Self::Shaders,
         }
     }
 

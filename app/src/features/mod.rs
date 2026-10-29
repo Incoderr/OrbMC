@@ -1,9 +1,12 @@
+pub mod auth;
 pub mod downloads;
 pub mod instances;
 pub mod java;
+pub mod modpacks;
 pub mod mods;
 pub mod rich_presence;
 pub mod settings;
 pub mod skins;
+pub mod updates;
 pub mod versions;
 pub mod worlds;

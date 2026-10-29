@@ -4191,6 +4191,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "minisign-verify"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "871285dc19d8d0ebe0eef3d0e99a205f2a71363b122632cbbfa4a6c370a960ce"
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4959,6 +4965,44 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "orbmc"
+version = "0.2.0"
+dependencies = [
+ "dirs 6.0.0",
+ "discord-rich-presence",
+ "futures",
+ "gpui-devtools",
+ "gpui-kit",
+ "image",
+ "mc-launcher-core",
+ "minisign-verify",
+ "orbmc-core",
+ "raw-window-handle",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1 0.10.7",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "uuid 1.27.0",
+ "windows 0.61.3",
+ "winresource",
+ "zip",
+]
+
+[[package]]
+name = "orbmc-core"
+version = "0.2.0"
+dependencies = [
+ "image",
+ "quick-xml",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "ordered-float"
@@ -5969,39 +6013,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "rs-mc-launcher"
-version = "0.1.0"
-dependencies = [
- "dirs 6.0.0",
- "discord-rich-presence",
- "futures",
- "gpui-devtools",
- "gpui-kit",
- "image",
- "mc-launcher-core",
- "raw-window-handle",
- "reqwest",
- "rs-mc-launcher-core",
- "serde",
- "serde_json",
- "sha1 0.10.7",
- "tempfile",
- "tracing",
- "uuid 1.27.0",
- "windows 0.61.3",
-]
-
-[[package]]
-name = "rs-mc-launcher-core"
-version = "0.1.0"
-dependencies = [
- "image",
- "quick-xml",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -8932,6 +8943,16 @@ checksum = "cb5a765337c50e9ec252c2069be9bf91c7df47afb103b642ba3a53bf8101be97"
 dependencies = [
  "cfg-if",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2bc6d36480b829272a5bdabf08e6dca8004761c1da7e35efef800540c66221b"
+dependencies = [
+ "toml 1.1.6+spec-1.1.0",
+ "version_check",
 ]
 
 [[package]]

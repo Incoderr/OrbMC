@@ -1,21 +1,19 @@
-use crate::app::LauncherApp;
-use crate::app::theme::Palette;
-use crate::app::ui::*;
-use crate::features::instances::*;
+use super::InstancesView;
 use crate::features::settings::*;
+use crate::shared::ui::field_label;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::slider::{Slider, SliderState};
 use gpui_kit::*;
 
-impl LauncherApp {
+impl InstancesView {
     pub(crate) fn open_profile_settings(
         &mut self,
-        id: uuid::Uuid,
+        id: crate::features::instances::InstanceId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(profile) = self.instances.profile(id) else {
+        let Some(profile) = self.instances.read(cx).profile(id).cloned() else {
             return;
         };
         let profile_name = profile.name.clone();
@@ -26,8 +24,8 @@ impl LauncherApp {
                 .step(256.)
                 .default_value(profile.memory_mb as f32)
         });
-        let locale = self.settings.locale();
-        let palette = Palette::for_settings(self.settings.theme(), self.settings.accent());
+        let locale = self.locale;
+        let palette = self.palette;
         let title = format!(
             "{} · {profile_name}",
             locale.text("Настройки сборки", "Profile settings")
@@ -42,7 +40,7 @@ impl LauncherApp {
                 .content(move |content, _, cx| {
                     let current_profile = content_owner
                         .upgrade()
-                        .and_then(|owner| owner.read(cx).instances.profile(id).cloned());
+                        .and_then(|owner| owner.read(cx).instances.read(cx).profile(id).cloned());
                     let java_path = current_profile
                         .as_ref()
                         .and_then(|profile| profile.java_path.as_ref())
@@ -139,6 +137,7 @@ impl LauncherApp {
                                             .gap_2()
                                             .child(
                                                 UiButton::new(format!("profile-java-choose-{id}"))
+                                                    .cursor_pointer()
                                                     .px_3()
                                                     .py_2()
                                                     .rounded(px(7.))
@@ -148,7 +147,7 @@ impl LauncherApp {
                                                     .on_click(move |_, _, cx| {
                                                         if let Some(owner) = choose_owner.upgrade()
                                                         {
-                                                            let _ = owner.update(cx, |this, cx| {
+                                                            owner.update(cx, |this, cx| {
                                                                 this.choose_java_for_profile(
                                                                     id, cx,
                                                                 );
@@ -162,6 +161,7 @@ impl LauncherApp {
                                             )
                                             .child(
                                                 UiButton::new(format!("profile-java-auto-{id}"))
+                                                    .cursor_pointer()
                                                     .px_3()
                                                     .py_2()
                                                     .rounded(px(7.))
@@ -172,7 +172,7 @@ impl LauncherApp {
                                                         if let Some(owner) =
                                                             automatic_owner.upgrade()
                                                         {
-                                                            let _ = owner.update(cx, |this, cx| {
+                                                            owner.update(cx, |this, cx| {
                                                                 this.set_profile_java_path(
                                                                     id, None, cx,
                                                                 );
@@ -196,6 +196,7 @@ impl LauncherApp {
                             )
                             .child(
                                 UiButton::new(format!("profile-settings-save-{id}"))
+                                    .cursor_pointer()
                                     .w_full()
                                     .px_3()
                                     .py_2()
@@ -207,9 +208,11 @@ impl LauncherApp {
                                         let memory_mb =
                                             save_slider.read(cx).value().end().round() as u32;
                                         if let Some(owner) = save_owner.upgrade() {
-                                            let _ = owner.update(cx, |this, cx| {
-                                                this.instances.set_memory_mb(id, memory_mb);
-                                                this.persist_profiles();
+                                            owner.update(cx, |this, cx| {
+                                                this.instances.update(cx, |instances, _| {
+                                                    instances.set_memory_mb(id, memory_mb)
+                                                });
+                                                this.instances.read(cx).save();
                                                 cx.notify();
                                             });
                                             window.close_dialog(cx);
@@ -224,16 +227,16 @@ impl LauncherApp {
 
     pub(crate) fn open_delete_profile_confirmation(
         &mut self,
-        id: uuid::Uuid,
+        id: crate::features::instances::InstanceId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(profile) = self.instances.profile(id) else {
+        let Some(profile) = self.instances.read(cx).profile(id).cloned() else {
             return;
         };
         let profile_name = profile.name.clone();
-        let locale = self.settings.locale();
-        let palette = Palette::for_settings(self.settings.theme(), self.settings.accent());
+        let locale = self.locale;
+        let palette = self.palette;
         let title = locale.text("Удалить сборку?", "Delete profile?");
         let owner = cx.entity().downgrade();
 
@@ -266,7 +269,7 @@ impl LauncherApp {
                                     .justify_end()
                                     .gap_2()
                                     .child(
-                                        UiButton::new(format!("cancel-delete-profile-{id}"))
+                                        UiButton::new(format!("cancel-delete-profile-{id}")).cursor_pointer()
                                             .px_3()
                                             .py_2()
                                             .rounded(px(8.))
@@ -277,7 +280,7 @@ impl LauncherApp {
                                             .child(locale.text("Отмена", "Cancel")),
                                     )
                                     .child(
-                                        UiButton::new(format!("confirm-delete-profile-{id}"))
+                                        UiButton::new(format!("confirm-delete-profile-{id}")).cursor_pointer()
                                             .px_3()
                                             .py_2()
                                             .rounded(px(8.))
@@ -286,39 +289,10 @@ impl LauncherApp {
                                             .hover(|style| style.opacity(0.9))
                                             .on_click(move |_, window, cx| {
                                                 if let Some(owner) = action_owner.upgrade() {
-                                                    let _ = owner.update(cx, |this, cx| {
-                                                        let Some(profile) = this
-                                                            .instances
-                                                            .profile(id)
-                                                            .cloned()
-                                                        else {
-                                                            return;
-                                                        };
-                                                        let runtime = this.instances.runtime(&id);
-                                                        if runtime.is_busy() {
-                                                            return;
-                                                        }
-
-                                                        this.instances.mark_removing(id);
-                                                        let (sender, receiver) =
-                                                            futures::channel::mpsc::unbounded();
-                                                        let worker = std::thread::Builder::new()
-                                                            .name(format!("remove-profile-{id}"))
-                                                            .spawn(move || {
-                                                                remove_profile_data(profile, sender)
-                                                            });
-                                                        match worker {
-                                                            Ok(_) => this.listen_for_instance_events(
-                                                                receiver, cx,
-                                                            ),
-                                                            Err(error) => this.instances
-                                                                .mark_removal_failed(
-                                                                    id,
-                                                                    format!(
-                                                                        "Не удалось запустить удаление: {error}"
-                                                                    ),
-                                                                )}
-                                                        cx.notify();
+                                                    owner.update(cx, |this, cx| {
+                                                        this.instances.update(cx, |instances, cx| {
+                                                            instances.start_removal(id, cx)
+                                                        });
                                                     });
                                                 }
                                                 window.close_dialog(cx);

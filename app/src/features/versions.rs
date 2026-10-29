@@ -3,15 +3,28 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Request};
-use rs_mc_launcher_core::minecraft::loaders::{
+use orbmc_core::minecraft::loaders::{
     FABRIC_LOADER_MANIFEST_URL, FORGE_PROMOTIONS_URL, FabricGameLoaderManifest,
-    FabricLoaderManifest, ForgeChannel, ForgeManifest, NEOFORGE_MAVEN_METADATA_URL,
+    FabricLoaderManifest, ForgeManifest, LoaderRelease, NEOFORGE_MAVEN_METADATA_URL,
     NeoForgeManifest,
 };
-use rs_mc_launcher_core::minecraft::manifest::{VERSION_MANIFEST_URL, VersionManifest};
+use orbmc_core::minecraft::manifest::{VERSION_MANIFEST_URL, VersionManifest};
 use serde::{Deserialize, Serialize};
 
 use crate::platform::manifest_cache;
+
+mod picker;
+
+pub use picker::{CreateProfile, VersionPicker};
+
+pub fn loader_title(loader: LoaderChoice) -> &'static str {
+    match loader {
+        LoaderChoice::Vanilla => "Vanilla",
+        LoaderChoice::Fabric => "Fabric",
+        LoaderChoice::NeoForge => "NeoForge",
+        LoaderChoice::Forge => "Forge",
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -90,55 +103,25 @@ impl VersionCatalogState {
                 .map(str::to_owned);
         }
 
+        let release = match self.loader_version_mode {
+            LoaderVersionMode::Stable => LoaderRelease::Stable,
+            LoaderVersionMode::Latest => LoaderRelease::Latest,
+            LoaderVersionMode::Other => return None,
+        };
         let game_version = self.game_version()?;
         match self.loader_choice {
             LoaderChoice::Vanilla => None,
-            LoaderChoice::Forge => {
-                let channel = match self.loader_version_mode {
-                    LoaderVersionMode::Stable => ForgeChannel::Recommended,
-                    LoaderVersionMode::Latest => ForgeChannel::Latest,
-                    LoaderVersionMode::Other => return None,
-                };
-                self.forge
-                    .as_ref()?
-                    .promotions
-                    .iter()
-                    .find(|promotion| {
-                        promotion.minecraft_version == game_version && promotion.channel == channel
-                    })
-                    .map(|promotion| {
-                        format!("{}-{}", promotion.minecraft_version, promotion.version)
-                    })
-            }
-            LoaderChoice::Fabric => {
-                let compatible = self.fabric_by_game.get(game_version)?;
-                match self.loader_version_mode {
-                    LoaderVersionMode::Stable => compatible
-                        .versions
-                        .iter()
-                        .find(|version| version.stable)
-                        .or_else(|| compatible.versions.first()),
-                    LoaderVersionMode::Latest => compatible.versions.first(),
-                    LoaderVersionMode::Other => None,
-                }
-                .map(|version| version.version.clone())
-            }
-            LoaderChoice::NeoForge => {
-                let versions = &self.neoforge.as_ref()?.versions;
-                let for_game = versions
-                    .iter()
-                    .filter(|version| version.minecraft_version == game_version);
-                match self.loader_version_mode {
-                    LoaderVersionMode::Stable => for_game
-                        .clone()
-                        .filter(|version| !version.version.contains('-'))
-                        .last()
-                        .or_else(|| for_game.last()),
-                    LoaderVersionMode::Latest => for_game.last(),
-                    LoaderVersionMode::Other => None,
-                }
-                .map(|version| version.version.clone())
-            }
+            LoaderChoice::Forge => self.forge.as_ref()?.pick(game_version, release),
+            LoaderChoice::Fabric => self
+                .fabric_by_game
+                .get(game_version)?
+                .pick(release)
+                .map(str::to_owned),
+            LoaderChoice::NeoForge => self
+                .neoforge
+                .as_ref()?
+                .pick(game_version, release)
+                .map(str::to_owned),
         }
     }
 

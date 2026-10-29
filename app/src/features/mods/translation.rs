@@ -97,7 +97,7 @@ async fn translate_single_chunk(
     );
     let request = Request::builder()
         .uri(url)
-        .header("User-Agent", "Mozilla/5.0 (rs-mc-launcher)")
+        .header("User-Agent", "Mozilla/5.0 (orbmc)")
         .body(AsyncBody::empty())
         .map_err(|error| TranslationError {
             message: format!("Could not prepare translation request: {error}"),

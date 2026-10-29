@@ -1,9 +1,18 @@
-use std::fs;
+use std::{fs, path::Path};
 
 use mc_launcher_core::{
     core::maven::MavenCoordinate,
     io::{hash::sha1_file, paths::safe_join},
 };
+
+/// Renders a path with forward slashes so the expected values below are
+/// platform-independent (`artifact_path` uses `PathBuf::push`).
+fn slash_form(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
 
 #[test]
 fn parses_maven_coordinate_with_classifier() {
@@ -17,7 +26,7 @@ fn parses_maven_coordinate_with_classifier() {
     );
     assert_eq!(coordinate.extension, "jar");
     assert_eq!(
-        coordinate.artifact_path().to_string_lossy(),
+        slash_form(&coordinate.artifact_path()),
         "org/lwjgl/lwjgl/3.3.2/lwjgl-3.3.2-natives-macos-arm64.jar"
     );
 }
@@ -27,7 +36,7 @@ fn parses_maven_coordinate_with_extension() {
     let coordinate = MavenCoordinate::parse("com.example:demo:1.0@zip").unwrap();
     assert_eq!(coordinate.extension, "zip");
     assert_eq!(
-        coordinate.artifact_path().to_string_lossy(),
+        slash_form(&coordinate.artifact_path()),
         "com/example/demo/1.0/demo-1.0.zip"
     );
 }

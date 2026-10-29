@@ -76,7 +76,7 @@ fn cache_path(key: &str) -> std::io::Result<std::path::PathBuf> {
     }
 
     Ok(root
-        .join("rs-mc-launcher")
+        .join("orbmc")
         .join("manifests")
         .join(format!("{file_name}.json")))
 }

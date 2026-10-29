@@ -1,14 +1,15 @@
 use std::rc::Rc;
 
-use crate::app::LauncherApp;
-use crate::app::theme::Palette;
-use crate::app::ui::*;
+use super::widgets::*;
+use super::{CatalogEvent, CatalogView};
 use crate::features::mods::catalog::*;
 use crate::features::mods::*;
 use crate::features::settings::*;
-use crate::router::Page;
+use crate::shared::theme::Palette;
+use crate::shared::ui::selectable;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::Button as ComponentButton;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -17,7 +18,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-impl LauncherApp {
+impl CatalogView {
     pub(crate) fn mods_page(
         &self,
         palette: Palette,
@@ -39,6 +40,7 @@ impl LauncherApp {
                     filter.loader.title(locale)
                 );
                 UiButton::new("clear-mod-compatibility-filter")
+                    .cursor_pointer()
                     .px_3()
                     .py_2()
                     .rounded(px(8.))
@@ -52,11 +54,32 @@ impl LauncherApp {
                     }))
                     .child(label)
             });
+        let author_chip = self.mods.author().map(|author| {
+            UiButton::new("clear-author-filter")
+                .cursor_pointer()
+                .px_3()
+                .py_2()
+                .rounded(px(8.))
+                .bg(rgb(palette.selected))
+                .text_color(rgb(palette.accent))
+                .hover(|style| style.bg(rgb(palette.hover)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.mods.set_author(None);
+                    this.mods_scroll.scroll_to_item(0, ScrollStrategy::Top);
+                    this.load_mod_catalog(cx, false);
+                }))
+                .child(format!(
+                    "{} {} ×",
+                    locale.text("Автор:", "Author:"),
+                    author.name
+                ))
+        });
         let categories: Vec<_> = ModCategory::ALL
             .into_iter()
             .map(|category| {
                 let is_selected = category == selected_category;
                 UiButton::new(category.id())
+                    .cursor_pointer()
                     .w_full()
                     .px_2()
                     .py_2()
@@ -79,7 +102,7 @@ impl LauncherApp {
                     .selected(is_selected)
                     .accessibility_label(category.title(locale))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.mods.set_category(category);
+                        this.mods.toggle_category(category);
                         this.mods_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         this.load_mod_catalog(cx, false);
                         cx.notify();
@@ -94,6 +117,7 @@ impl LauncherApp {
             .map(|source| {
                 let is_selected = source == selected_source;
                 UiButton::new(format!("mods-source-{source:?}"))
+                    .cursor_pointer()
                     .w_full()
                     .px_2()
                     .py_2()
@@ -115,7 +139,7 @@ impl LauncherApp {
                     .when(is_selected, |row| row.bg(rgb(palette.selected)))
                     .selected(is_selected)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.mods.set_source(source);
+                        this.mods.toggle_source(source);
                         this.mods_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         this.load_mod_catalog(cx, false);
                     }))
@@ -126,7 +150,9 @@ impl LauncherApp {
 
         let sort_owner = cx.entity().downgrade();
         let sort_menu = ComponentButton::new("mods-sort")
+            .cursor_pointer()
             .outline()
+            .h(px(44.))
             .child(
                 div()
                     .h_flex()
@@ -183,7 +209,7 @@ impl LauncherApp {
         let total_pages = self.mods.total_pages();
         let is_loading = self.mods.is_loading();
 
-        let page_button = |owner: WeakEntity<LauncherApp>,
+        let page_button = |owner: WeakEntity<CatalogView>,
                            key: String,
                            page: usize,
                            label: SharedString,
@@ -194,6 +220,7 @@ impl LauncherApp {
             // "Дальше") reuse page numbers, so they need a distinct key to
             // avoid duplicate element ids.
             UiButton::new(key)
+                .cursor_pointer()
                 .px_3()
                 .py_2()
                 .rounded(px(7.))
@@ -294,24 +321,57 @@ impl LauncherApp {
         };
         let item_sizes = Rc::new(vec![size(px(1.), px(96.)); visible_count]);
         let scroll_handle = self.mods_scroll.clone();
-        let errors = self.mods.errors().iter().map(|error| {
-            let message = if error.missing_api_key {
-                locale.text(
-                    "Чтобы включить CurseForge, задай переменную среды CURSEFORGE_API_KEY.",
-                    "Set the CURSEFORGE_API_KEY environment variable to enable CurseForge.",
-                )
-            } else {
-                error.message.as_str()
-            };
+        // A missing CurseForge key is a property of the build, not a failure:
+        // it is explained under the source filter instead.
+        let failures: Vec<String> = self
+            .mods
+            .errors()
+            .iter()
+            .filter(|error| !error.missing_api_key)
+            .map(|error| format!("{}: {}", error.provider.title(locale), error.message))
+            .collect();
+        let error_banner = (!failures.is_empty()).then(|| {
             div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .gap_3()
                 .px_3()
                 .py_2()
                 .rounded(px(8.))
                 .bg(rgb(palette.control))
-                .text_size(px(11.))
-                .text_color(rgb(palette.muted))
-                .child(format!("{}: {message}", error.provider.title(locale)))
-                .into_any_element()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .child(
+                    div()
+                        .text_color(rgb(0xef8580))
+                        .child(IconName::TriangleAlert),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette.muted))
+                        .child(selectable("catalog-errors", failures.join(" · "))),
+                )
+                .when(!self.mods.is_loading(), |banner| {
+                    banner.child(
+                        UiButton::new("retry-mod-catalog")
+                            .cursor_pointer()
+                            .px_3()
+                            .py_1()
+                            .rounded(px(6.))
+                            .bg(rgb(palette.surface))
+                            .text_size(px(12.))
+                            .text_color(rgb(palette.foreground))
+                            .hover(|style| style.bg(rgb(palette.hover)))
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.load_mod_catalog(cx, false)),
+                            )
+                            .child(locale.text("Повторить", "Retry")),
+                    )
+                })
         });
 
         let cards_content = if visible_count > 0 {
@@ -369,32 +429,28 @@ impl LauncherApp {
                 .into_any_element()
         };
 
-        let retry = if !self.mods.errors().is_empty() && !self.mods.is_loading() {
-            Some(
-                UiButton::new("retry-mod-catalog")
-                    .px_3()
-                    .py_2()
-                    .rounded(px(7.))
-                    .bg(rgb(palette.control))
-                    .text_color(rgb(palette.foreground))
-                    .on_click(cx.listener(|this, _, _, cx| this.load_mod_catalog(cx, false)))
-                    .child(locale.text("Повторить", "Retry")),
-            )
-        } else {
-            None
-        };
-
         let target_name = self
             .mods
             .target_profile()
-            .and_then(|id| self.instances.profile(id))
+            .and_then(|id| self.instances.read(cx).profile(id))
             .map(|profile| profile.name.clone())
             .unwrap_or_else(|| locale.text("Все сборки", "All builds").into());
-        let profiles = self.instances.profiles().to_vec();
+        let profiles = self.instances.read(cx).profiles().to_vec();
         let target_owner = cx.weak_entity();
         let target_menu = ComponentButton::new("catalog-target")
+            .cursor_pointer()
             .outline()
-            .label(target_name)
+            .h(px(44.))
+            .accessibility_label(locale.text("Установка в сборку", "Install into build"))
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(IconName::Box)
+                    .child(div().max_w(px(180.)).truncate().child(target_name))
+                    .child(IconName::ChevronDown),
+            )
             .dropdown_menu(move |mut menu, _, _| {
                 let clear_owner = target_owner.clone();
                 menu = menu.item(
@@ -447,6 +503,7 @@ impl LauncherApp {
                 |loader| loader.title(locale),
             );
             UiButton::new(format!("catalog-loader-{loader:?}"))
+                .cursor_pointer()
                 .w_full()
                 .px_2()
                 .py_2()
@@ -469,7 +526,7 @@ impl LauncherApp {
                 .selected(selected)
                 .disabled(self.mods.target_profile().is_some())
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.mods.set_loader_filter(loader);
+                    this.mods.toggle_loader_filter(loader);
                     this.load_mod_catalog(cx, false);
                 }))
                 .child(label)
@@ -480,17 +537,17 @@ impl LauncherApp {
             + usize::from(selected_source != ModSource::All);
         let version_query = self.mod_version_input.read(cx).value().to_string();
         let version_choices: Vec<_> = self
-            .versions
-            .manifest()
+            .version_picker
+            .read(cx)
+            .release_ids()
             .into_iter()
-            .flat_map(|manifest| &manifest.versions)
-            .filter(|version| {
-                version.version_type == "release" && version.id.contains(version_query.trim())
-            })
+            .filter(|id| id.contains(version_query.trim()))
             // The version manifest is already sorted newest-first.
-            .map(|version| {
-                let id = version.id.clone();
+            .map(|id| {
+                let label = id.clone();
+                let active = filters.game_version.as_deref() == Some(id.as_str());
                 UiButton::new(format!("catalog-version-{id}"))
+                    .cursor_pointer()
                     .w_full()
                     .flex_shrink_0()
                     .px_2()
@@ -520,10 +577,14 @@ impl LauncherApp {
                     )
                     .disabled(self.mods.target_profile().is_some())
                     .on_click(cx.listener(move |this, _, window, cx| {
+                        // Picking the active version again clears the filter.
+                        let value = if active { String::new() } else { id.clone() };
+                        // `set_value` emits no change event: apply directly.
                         this.mod_version_input
-                            .update(cx, |input, cx| input.set_value(id.clone(), window, cx));
+                            .update(cx, |input, cx| input.set_value(value.clone(), window, cx));
+                        this.apply_version_filter(&value, false, cx);
                     }))
-                    .child(version.id.clone())
+                    .child(label)
             })
             .collect();
         let filters_panel = div()
@@ -554,7 +615,7 @@ impl LauncherApp {
                             )),
                     )
                     .child(
-                        UiButton::new("reset-catalog-filters")
+                        UiButton::new("reset-catalog-filters").cursor_pointer()
                             .text_size(px(10.))
                             .text_color(rgb(palette.muted))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -642,47 +703,183 @@ impl LauncherApp {
                             .into_any_element(),
                     ))
             })
-            .child(div().h(px(1.)).bg(rgb(palette.border)))
-            .child(Self::filter_section(
+            // Only one provider while CurseForge is off: nothing to choose.
+            .when(super::super::CURSEFORGE_ENABLED, |panel| {
+                panel
+                    .child(div().h(px(1.)).bg(rgb(palette.border)))
+                    .child(Self::filter_section(
                 FilterSection::Source,
                 locale.text("Источник", "Source").to_owned(),
                 self.mods.filters_collapsed(FilterSection::Source),
                 palette,
                 cx,
-                div().v_flex().gap_1().children(sources).into_any_element(),
-            ));
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .children(sources)
+                    .when(super::super::curseforge_api_key().is_none(), |list| {
+                        list.child(
+                            div()
+                                .px_2()
+                                .pt_1()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette.muted))
+                                .child(locale.text(
+                                    "CurseForge недоступен: в этой сборке лаунчера нет ключа API.",
+                                    "CurseForge is unavailable: this launcher build has no API key.",
+                                )),
+                        )
+                    })
+                    .into_any_element(),
+            ))
+            });
         let checking = self
             .instances
+            .read(cx)
             .profiles()
             .iter()
             .any(|profile| self.mods.installed.is_loading(profile.id));
         let incomplete = self
             .instances
+            .read(cx)
             .profiles()
             .iter()
             .any(|profile| self.mods.installed.warning(profile.id).is_some());
-        div().h_flex().items_stretch().w_full().flex_1().min_h_0().min_w_0().gap_4()
+        let results = format!(
+            "{} {}",
+            locale.text("Найдено", "Found"),
+            group_digits(self.mods.total_results())
+        );
+        let inventory_status = (checking || incomplete).then(|| {
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(if checking {
+                    locale.text("Проверяем установленные моды…", "Checking installed mods…")
+                } else {
+                    locale.text(
+                        "Часть файлов не распознана — отметки «установлено» могут быть неполными",
+                        "Some files were not identified; installed markers may be incomplete",
+                    )
+                })
+                .when(!checking, |status| {
+                    status.child(
+                        UiButton::new("retry-mod-inventory")
+                            .cursor_pointer()
+                            .text_size(px(12.))
+                            .text_color(rgb(palette.accent))
+                            .hover(|style| style.opacity(0.8))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_installed_mods(cx);
+                                cx.notify();
+                            }))
+                            .child(locale.text("Проверить снова", "Check again")),
+                    )
+                })
+        });
+        let toolbar = div()
+            .h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.search_bar(palette, locale)),
+            )
+            .when(selected_kind == ProjectKind::Mod, |row| {
+                row.child(target_menu)
+            })
+            .child(sort_menu);
+        let meta = div()
+            .h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .text_size(px(12.))
+            .text_color(rgb(palette.muted))
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(results)
+                    .when(is_loading, |row| {
+                        row.child(locale.text("· загрузка…", "· loading…"))
+                    }),
+            )
+            .children(inventory_status);
+
+        div()
+            .h_flex()
+            .items_stretch()
+            .w_full()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .gap_4()
             .child(filters_panel)
-            .child(div().v_flex().flex_1().min_h_0().min_w_0().gap_3()
-                .child(self.search_bar(palette, locale))
-                .when(selected_kind == ProjectKind::Mod, |this| this.child(div().h_flex().items_center().gap_2()
-                    .child(div().text_size(px(12.)).text_color(rgb(palette.muted)).child(locale.text("Установка в", "Install into")))
-                    .child(target_menu)))
-                .when_some(target_filter_chip, |this, chip| this.child(chip))
-                .child(div().h_flex().w_full().items_center().justify_between()
-                    .child(div().h_flex().items_center().gap_2().text_size(px(12.)).text_color(rgb(palette.muted))
-                        .child(format!("{} {}", self.mods.total_results(), selected_kind.title(locale)))
-                        .when(is_loading, |this| this.child(locale.text("· Загрузка…", "· Loading…"))))
-                    .child(sort_menu))
-                .when(checking || incomplete, |this| this.child(div().h_flex().items_center().gap_2()
-                    .child(div().text_size(px(11.)).text_color(rgb(palette.muted)).child(if checking {
-                        locale.text("Проверяем установленные моды…", "Checking installed mods…")
-                    } else { locale.text("Не все файлы удалось распознать. Отметки могут быть неполными.", "Some files could not be identified. Installed markers may be incomplete.") }))
-                    .when(!checking, |this| this.child(UiButton::new("retry-mod-inventory").text_size(px(11.))
-                        .on_click(cx.listener(|this, _, _, cx| { this.refresh_installed_mods(cx); cx.notify(); }))
-                        .child(locale.text("Проверить снова", "Check again"))))))
-                .children(errors).when_some(retry, |this, button| this.child(button))
-                .child(cards_content).child(pagination))
+            .child(
+                div()
+                    .v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .gap_3()
+                    .child(toolbar)
+                    .when(
+                        target_filter_chip.is_some() || author_chip.is_some(),
+                        |column| {
+                            column.child(
+                                div()
+                                    .h_flex()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .children(target_filter_chip)
+                                    .children(author_chip),
+                            )
+                        },
+                    )
+                    .child(meta)
+                    .when_some(self.notice.clone(), |column, notice| {
+                        column.child(
+                            div()
+                                .h_flex()
+                                .w_full()
+                                .items_center()
+                                .gap_3()
+                                .px_3()
+                                .py_2()
+                                .rounded(px(8.))
+                                .bg(rgb(palette.control))
+                                .text_size(px(12.))
+                                .text_color(rgb(palette.muted))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(selectable("catalog-notice", notice)),
+                                )
+                                .child(
+                                    UiButton::new("dismiss-catalog-notice")
+                                        .cursor_pointer()
+                                        .text_color(rgb(palette.muted))
+                                        .hover(|style| style.text_color(rgb(palette.foreground)))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.notice = None;
+                                            cx.notify();
+                                        }))
+                                        .child(IconName::Close),
+                                ),
+                        )
+                    })
+                    .children(error_banner)
+                    .child(cards_content)
+                    .child(pagination),
+            )
             .into_any_element()
     }
     /// Collapsible section header for the catalog filters sidebar. Closed
@@ -701,6 +898,7 @@ impl LauncherApp {
             .gap_1()
             .child(
                 UiButton::new(format!("filters-section-{section:?}"))
+                    .cursor_pointer()
                     .w_full()
                     .px_2()
                     .py_1()
@@ -743,10 +941,10 @@ impl LauncherApp {
         cx: &Context<Self>,
     ) -> AnyElement {
         let target = self.mods.target_profile();
-        let checking = self.instances.profiles().iter().any(|profile| {
+        let checking = self.instances.read(cx).profiles().iter().any(|profile| {
             target.is_none_or(|id| profile.id == id) && self.mods.installed.is_loading(profile.id)
         });
-        let busy = target.is_some_and(|id| self.instances.runtime(&id).is_busy());
+        let busy = target.is_some_and(|id| self.instances.read(cx).runtime(&id).is_busy());
         let already_installed =
             target.is_some_and(|id| self.mods.installed.contains(id, &project.id));
         // Per-item state: only the card whose download is in flight changes
@@ -754,7 +952,7 @@ impl LauncherApp {
         // text onto unrelated cards.
         let installing = self.mods.installed.is_installing(&project.id);
         let download_project = project.clone();
-        let uninstall_target = self.uninstall_target(&project.id);
+        let uninstall_target = self.uninstall_target(&project.id, cx);
         div()
             .v_flex()
             .items_end()
@@ -766,6 +964,7 @@ impl LauncherApp {
                     .gap_2()
                     .child(
                         UiButton::new(format!("install-project-{}", project.id))
+                            .cursor_pointer()
                             .px_3()
                             .py_2()
                             .rounded(px(7.))
@@ -801,10 +1000,11 @@ impl LauncherApp {
                             .to_owned();
                         let uninstall_project = project.id.clone();
                         let target_blocked = checking
-                            || self.instances.runtime(&target_id).is_busy()
+                            || self.instances.read(cx).runtime(&target_id).is_busy()
                             || self.mods.installed.is_loading(target_id);
                         row.child(
                             UiButton::new(format!("uninstall-project-{}", project.id))
+                                .cursor_pointer()
                                 .px_3()
                                 .py_2()
                                 .rounded(px(7.))
@@ -826,6 +1026,62 @@ impl LauncherApp {
             .into_any_element()
     }
 
+    /// "Install" for Modrinth modpacks (a new build is created); CurseForge
+    /// packs open their page.
+    pub(crate) fn modpack_install_action(
+        &self,
+        project: &ModProject,
+        palette: Palette,
+        locale: Locale,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        if project.source != ModSource::Modrinth {
+            let page_url = project.page_url.clone();
+            return UiButton::new(format!("open-project-{}", project.id))
+                .cursor_pointer()
+                .px_3()
+                .py_2()
+                .rounded(px(7.))
+                .bg(rgb(palette.control))
+                .text_color(rgb(palette.foreground))
+                .hover(|style| style.bg(rgb(palette.hover)))
+                .tooltip(move |window, cx| {
+                    Tooltip::new(locale.text(
+                        "Сборки CurseForge пока ставятся только с сайта",
+                        "CurseForge packs can only be installed from the website for now",
+                    ))
+                    .build(window, cx)
+                })
+                .on_click(move |_, _, cx| cx.open_url(&page_url))
+                .child(locale.text("Открыть", "Open"))
+                .into_any_element();
+        }
+        let installing = self.mods.installed.is_installing(&project.id);
+        let pack = project.clone();
+        UiButton::new(format!("install-modpack-{}", project.id))
+            .cursor_pointer()
+            .px_3()
+            .py_2()
+            .rounded(px(7.))
+            .bg(rgb(palette.accent))
+            .text_color(rgb(palette.accent_foreground))
+            .hover(|style| style.opacity(0.9))
+            .disabled(installing)
+            .accessibility_label(
+                locale.text("Установить как новую сборку", "Install as a new build"),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.install_modpack(pack.clone(), cx);
+            }))
+            .child(if installing {
+                locale.text("Готовим…", "Preparing…")
+            } else {
+                locale.text("Установить", "Install")
+            })
+            .into_any_element()
+    }
+
     pub(crate) fn content_install_action(
         &self,
         project: &ModProject,
@@ -836,6 +1092,7 @@ impl LauncherApp {
         let installing = self.mods.installed.is_installing(&project.id);
         let download_project = project.clone();
         UiButton::new(format!("install-content-{}", project.id))
+            .cursor_pointer()
             .px_3()
             .py_2()
             .rounded(px(7.))
@@ -863,7 +1120,6 @@ impl LauncherApp {
     ) -> AnyElement {
         let description = self.mods.card_description(project, locale);
         let tooltip_description = description.clone();
-        let project_id = project.id.clone();
         let selected_project = project.clone();
         let tags: Vec<_> = project
             .categories
@@ -882,6 +1138,7 @@ impl LauncherApp {
             .collect();
 
         let details_button = UiButton::new(format!("open-mod-{}", project.id))
+            .cursor_pointer()
             .flex_1()
             .min_w_0()
             .px_3()
@@ -889,7 +1146,7 @@ impl LauncherApp {
             .rounded(px(8.))
             .text_color(rgb(palette.foreground))
             .accessibility_label(locale.text("Открыть описание проекта", "Open project details"))
-            .on_click(cx.listener(move |this, _, window, cx| {
+            .on_click(cx.listener(move |this, _, _, cx| {
                 let request_id = this.mods.select_mod(selected_project.clone());
                 this.load_mod_details(
                     selected_project.id.clone(),
@@ -897,7 +1154,7 @@ impl LauncherApp {
                     request_id,
                     cx,
                 );
-                this.navigate_to(Page::ModDetails, window, cx);
+                cx.emit(CatalogEvent::OpenDetails);
             }))
             .child(
                 div()
@@ -949,14 +1206,27 @@ impl LauncherApp {
                                     .gap_3()
                                     .text_size(px(10.))
                                     .text_color(rgb(palette.muted))
-                                    .child(
-                                        div()
+                                    .child({
+                                        let author_project = project.clone();
+                                        UiButton::new(format!("author-{}", project.id))
+                                            .cursor_pointer()
                                             .h_flex()
                                             .items_center()
                                             .gap_1()
+                                            .text_color(rgb(palette.muted))
+                                            .hover(|style| style.text_color(rgb(palette.accent)))
+                                            .accessibility_label(format!(
+                                                "{} {}",
+                                                locale.text("Проекты автора", "Projects by"),
+                                                project.author
+                                            ))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.show_author(&author_project, cx);
+                                            }))
                                             .child(IconName::User)
-                                            .child(project.author.clone()),
-                                    )
+                                            .child(project.author.clone())
+                                    })
                                     .child(
                                         div()
                                             .h_flex()
@@ -983,19 +1253,7 @@ impl LauncherApp {
             ProjectKind::ResourcePack | ProjectKind::Shader => {
                 self.content_install_action(project, palette, locale, cx)
             }
-            ProjectKind::Modpack => {
-                let page_url = project.page_url.clone();
-                UiButton::new(format!("open-project-{project_id}"))
-                    .px_3()
-                    .py_2()
-                    .rounded(px(7.))
-                    .bg(rgb(palette.control))
-                    .text_color(rgb(palette.foreground))
-                    .hover(|style| style.bg(rgb(palette.hover)))
-                    .on_click(move |_, _, cx| cx.open_url(&page_url))
-                    .child(locale.text("Открыть", "Open"))
-                    .into_any_element()
-            }
+            ProjectKind::Modpack => self.modpack_install_action(project, palette, locale, cx),
         };
 
         div()
@@ -1042,5 +1300,46 @@ impl LauncherApp {
                     .child(action),
             )
             .into_any_element()
+    }
+}
+
+impl CatalogView {
+    pub(crate) fn search_bar(&self, palette: Palette, locale: Locale) -> AnyElement {
+        Input::new(&self.search_input)
+            .large()
+            .w_full()
+            .px_3()
+            .rounded(px(8.))
+            .bg(rgb(palette.surface))
+            .border_1()
+            .border_color(rgb(palette.border))
+            .text_size(px(14.))
+            .prefix(IconName::Search)
+            .cleanable(true)
+            .aria_label(locale.text("Поиск по каталогу", "Search catalog"))
+            .into_any_element()
+    }
+}
+
+/// `77757` → `77 757`.
+fn group_digits(value: usize) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push('\u{202f}');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn digits_are_grouped_by_thousands() {
+        assert_eq!(super::group_digits(7), "7");
+        assert_eq!(super::group_digits(77_757), "77\u{202f}757");
+        assert_eq!(super::group_digits(1_234_567), "1\u{202f}234\u{202f}567");
     }
 }

@@ -1,5 +1,10 @@
-//! A read-only summary of active transfers, derived from their owning feature state.
+//! Downloads: the file transfer helper used by the catalog, and a
+//! read-only summary of active transfers for the global indicator.
 use super::instances::{InstanceRuntime, InstancesState};
+
+mod transfer;
+
+pub use transfer::*;
 
 #[derive(Debug)]
 pub struct DownloadSummary {
@@ -23,8 +28,11 @@ impl DownloadSummary {
                     speed_bps,
                     ..
                 } => (received, total_bytes, speed_bps),
-                InstanceRuntime::DownloadingMod { .. }
-                | InstanceRuntime::DownloadingContent { .. } => (0, None, 0.),
+                InstanceRuntime::DownloadingMod { transfer, .. }
+                | InstanceRuntime::DownloadingContent { transfer, .. } => {
+                    let progress = transfer.progress();
+                    (progress.received, progress.total, progress.speed_bps)
+                }
                 _ => return None,
             };
             Some(Self {
@@ -96,7 +104,7 @@ mod tests {
         let summary = DownloadSummary::from_instances(&state).unwrap();
         assert_eq!(summary.received, 25);
         assert_eq!(summary.total_bytes, Some(100));
-        state.mark_mod_downloading(second, "Sodium".into());
+        state.mark_mod_downloading(second, "Sodium".into(), TransferHandle::default());
         let summary = DownloadSummary::from_instances(&state).unwrap();
         assert_eq!(summary.active_count, 2);
         assert_eq!(summary.received, 0);

@@ -4,17 +4,49 @@ use gpui_kit::assets::IconName;
 pub mod catalog;
 pub mod installed;
 pub mod translation;
+pub mod view;
+
+pub use view::{CatalogEvent, CatalogTarget, CatalogView};
 
 #[derive(Clone, Debug, Default)]
 pub struct ModSearchFilters {
     pub game_version: Option<String>,
     pub loader: Option<ModLoaderFilter>,
     pub category: ModCategory,
+    pub author: Option<AuthorFilter>,
+}
+
+/// "Projects by this author". Modrinth filters by user name; CurseForge
+/// needs the author id, so authors picked from a Modrinth project show
+/// Modrinth results only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthorFilter {
+    pub name: String,
+    pub curseforge_id: Option<u64>,
 }
 
 #[cfg(test)]
 mod filter_tests {
     use super::*;
+
+    #[test]
+    fn picking_an_active_filter_again_turns_it_off() {
+        let mut state = ModsState::default();
+        state.toggle_category(ModCategory::Magic);
+        assert_eq!(state.category(), ModCategory::Magic);
+        state.toggle_category(ModCategory::Magic);
+        assert_eq!(state.category(), ModCategory::All);
+
+        state.toggle_source(catalog::ModSource::Modrinth);
+        assert_eq!(state.source(), catalog::ModSource::Modrinth);
+        state.toggle_source(catalog::ModSource::Modrinth);
+        assert_eq!(state.source(), catalog::ModSource::All);
+
+        state.toggle_loader_filter(Some(ModLoaderFilter::Fabric));
+        assert_eq!(state.search_filters().loader, Some(ModLoaderFilter::Fabric));
+        state.toggle_loader_filter(Some(ModLoaderFilter::Fabric));
+        assert_eq!(state.search_filters().loader, None);
+    }
     #[test]
     fn filters_reset_pagination_reject_old_responses_and_follow_the_target_build() {
         let mut state = ModsState {
@@ -28,7 +60,7 @@ mod filter_tests {
         assert!(!state.finish_search(old, catalog::ModCatalogResult::default()));
         state.set_game_version_filter("1.20.1".into());
         state.select_profile(
-            uuid::Uuid::new_v4(),
+            crate::features::instances::InstanceId::new(),
             ModCompatibilityFilter {
                 game_version: "1.21.1".into(),
                 loader: ModLoaderFilter::Fabric,
@@ -415,6 +447,7 @@ pub enum TranslationState {
 #[derive(Debug, Default)]
 pub struct ModsState {
     pub installed: installed::InstalledState,
+    author: Option<AuthorFilter>,
     kind: ProjectKind,
     category: ModCategory,
     sort: ModSort,
@@ -428,7 +461,7 @@ pub struct ModsState {
     loading: bool,
     request_id: u64,
     compatibility_filter: Option<ModCompatibilityFilter>,
-    target_profile: Option<uuid::Uuid>,
+    target_profile: Option<crate::features::instances::InstanceId>,
     /// Sidebar filter sections currently collapsed.
     collapsed_filters: std::collections::HashSet<FilterSection>,
     game_version_filter: Option<String>,
@@ -447,8 +480,13 @@ pub struct ModsState {
     /// Position of the selected screenshot in the project gallery.
     gallery_index: usize,
     translations: std::collections::HashMap<TranslationKey, TranslationState>,
+    /// Machine translation of descriptions is switched on in the settings.
+    translate: bool,
     /// Mods installed into each build, for the build details page.
-    build_mods: std::collections::HashMap<uuid::Uuid, Vec<installed::InstalledModEntry>>,
+    build_mods: std::collections::HashMap<
+        crate::features::instances::InstanceId,
+        Vec<installed::InstalledModEntry>,
+    >,
 }
 
 impl ModsState {
@@ -537,11 +575,15 @@ impl ModsState {
         self.compatibility_filter.as_ref()
     }
 
-    pub fn target_profile(&self) -> Option<uuid::Uuid> {
+    pub fn target_profile(&self) -> Option<crate::features::instances::InstanceId> {
         self.target_profile
     }
 
-    pub fn select_profile(&mut self, id: uuid::Uuid, filter: ModCompatibilityFilter) {
+    pub fn select_profile(
+        &mut self,
+        id: crate::features::instances::InstanceId,
+        filter: ModCompatibilityFilter,
+    ) {
         self.target_profile = Some(id);
         self.set_compatibility_filter(filter);
     }
@@ -559,6 +601,7 @@ impl ModsState {
                 .map(|f| f.loader)
                 .or(self.loader_filter),
             category: self.category,
+            author: self.author.clone(),
         };
         if self.kind != ProjectKind::Mod {
             filters.loader = None;
@@ -567,10 +610,50 @@ impl ModsState {
         filters
     }
 
+    pub fn author(&self) -> Option<&AuthorFilter> {
+        self.author.as_ref()
+    }
+
+    /// Shows projects of one author (or everyone's with `None`).
+    pub fn set_author(&mut self, author: Option<AuthorFilter>) {
+        if self.author != author {
+            self.author = author;
+            self.page = 0;
+            self.invalidate_search();
+        }
+    }
+
     pub fn set_game_version_filter(&mut self, version: String) {
         self.game_version_filter = (!version.trim().is_empty()).then(|| version.trim().to_owned());
         self.page = 0;
         self.invalidate_search();
+    }
+
+    /// Picking the active category again turns the filter off.
+    pub fn toggle_category(&mut self, category: ModCategory) {
+        self.set_category(if self.category == category {
+            ModCategory::All
+        } else {
+            category
+        });
+    }
+
+    /// Picking the active source again turns the filter off.
+    pub fn toggle_source(&mut self, source: catalog::ModSource) {
+        self.set_source(if self.source == source {
+            catalog::ModSource::All
+        } else {
+            source
+        });
+    }
+
+    /// Picking the active loader again turns the filter off.
+    pub fn toggle_loader_filter(&mut self, loader: Option<ModLoaderFilter>) {
+        self.set_loader_filter(if self.loader_filter == loader {
+            None
+        } else {
+            loader
+        });
     }
 
     pub fn set_loader_filter(&mut self, loader: Option<ModLoaderFilter>) {
@@ -584,6 +667,7 @@ impl ModsState {
         self.source = catalog::ModSource::All;
         self.game_version_filter = None;
         self.loader_filter = None;
+        self.author = None;
         self.clear_compatibility_filter();
         self.page = 0;
         self.invalidate_search();
@@ -734,7 +818,10 @@ impl ModsState {
     }
 
     /// Mods installed into the given build for the build details page.
-    pub fn build_mods(&self, profile: uuid::Uuid) -> &[installed::InstalledModEntry] {
+    pub fn build_mods(
+        &self,
+        profile: crate::features::instances::InstanceId,
+    ) -> &[installed::InstalledModEntry] {
         self.build_mods
             .get(&profile)
             .map(|entries| entries.as_slice())
@@ -743,7 +830,7 @@ impl ModsState {
 
     pub fn set_build_mods(
         &mut self,
-        profile: uuid::Uuid,
+        profile: crate::features::instances::InstanceId,
         entries: Vec<installed::InstalledModEntry>,
     ) {
         self.build_mods.insert(profile, entries);
@@ -753,8 +840,16 @@ impl ModsState {
     ///
     /// Returns the translation when it is ready, otherwise the original
     /// provider text. English never requests a translation.
+    pub fn set_translate(&mut self, enabled: bool) {
+        self.translate = enabled;
+    }
+
+    pub fn translates(&self) -> bool {
+        self.translate
+    }
+
     pub fn card_description(&self, project: &catalog::ModProject, locale: Locale) -> String {
-        if locale != Locale::Ru {
+        if locale != Locale::Ru || !self.translate {
             return project.description.clone();
         }
         match self
@@ -883,4 +978,30 @@ impl ModsState {
         self.total_results = 0;
         self.page_count = 0;
     }
+}
+
+pub fn mod_loader_filter(loader: crate::features::versions::LoaderChoice) -> ModLoaderFilter {
+    match loader {
+        crate::features::versions::LoaderChoice::Vanilla => ModLoaderFilter::Vanilla,
+        crate::features::versions::LoaderChoice::Fabric => ModLoaderFilter::Fabric,
+        crate::features::versions::LoaderChoice::Forge => ModLoaderFilter::Forge,
+        crate::features::versions::LoaderChoice::NeoForge => ModLoaderFilter::NeoForge,
+    }
+}
+
+/// CurseForge is switched off for now: the catalog, mod identification and
+/// the source filter use Modrinth only. The integration stays in place.
+pub const CURSEFORGE_ENABLED: bool = false;
+
+/// CurseForge API key: `CURSEFORGE_API_KEY` at run time wins, otherwise the
+/// key baked into this launcher build (`CURSEFORGE_API_KEY` at compile time).
+/// Without one (or with CurseForge switched off) only Modrinth is used.
+pub fn curseforge_api_key() -> Option<String> {
+    if !CURSEFORGE_ENABLED {
+        return None;
+    }
+    std::env::var("CURSEFORGE_API_KEY")
+        .ok()
+        .or_else(|| option_env!("CURSEFORGE_API_KEY").map(str::to_owned))
+        .filter(|key| !key.trim().is_empty())
 }

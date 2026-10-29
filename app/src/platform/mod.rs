@@ -1,8 +1,12 @@
+pub mod instance_layout;
 pub mod java;
+pub mod logging;
 pub mod manifest_cache;
 pub mod mod_files;
 pub mod process;
 pub mod profile_store;
+pub mod self_update;
+pub mod single_instance;
 pub mod skin_store;
 pub mod translation_cache;
 #[cfg(target_os = "windows")]

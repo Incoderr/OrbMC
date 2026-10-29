@@ -11,14 +11,21 @@
 //! [`NEOFORGE_ICON_KEY`]. Profiles with a build cover pass its public image
 //! URL instead; Discord renders public https URLs directly.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use super::instances::{InstanceEvent, InstanceId, InstanceRuntime, InstancesState};
+use super::settings::SettingsState;
 use super::versions::LoaderChoice;
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use gpui_kit::{Context, Entity, Subscription};
 
-/// Discord application ID whose status text is reused for the game.
-/// Create an application at discord.com/developers, then paste its ID here.
-pub const DISCORD_APPLICATION_ID: &str = "1562807831445372979";
+/// Discord application whose name and icons the status shows, taken from
+/// `ORBMC_DISCORD_APP_ID` at build time. Official builds get it from CI;
+/// builds without it (forks, local builds) simply show no status, so they
+/// never appear under someone else's application.
+const DISCORD_APPLICATION_ID: Option<&str> = option_env!("ORBMC_DISCORD_APP_ID");
 
 /// Key of the grass block asset in the Discord application's Rich Presence
 /// assets; shown for vanilla profiles.
@@ -102,16 +109,115 @@ impl RichPresenceHandle {
     }
 }
 
+/// Keeps the Discord status in sync with running builds and the settings
+/// toggle: a started game shows up, an exited one disappears.
+pub struct DiscordPresence {
+    handle: RichPresenceHandle,
+    instances: Entity<InstancesState>,
+    enabled: bool,
+    /// Build whose session is currently shown.
+    shown: Option<InstanceId>,
+    _subscriptions: [Subscription; 2],
+}
+
+impl DiscordPresence {
+    pub fn new(
+        instances: Entity<InstancesState>,
+        settings: &Entity<SettingsState>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (handle, commands) = RichPresenceHandle::session();
+        cx.background_executor().spawn(run(commands)).detach();
+        let subscriptions = [
+            cx.subscribe(
+                &instances,
+                |this, _, event: &InstanceEvent, cx| match *event {
+                    InstanceEvent::GameStarted(id) => this.show(id, cx),
+                    InstanceEvent::GameExited(id) if this.shown == Some(id) => this.clear(),
+                    _ => {}
+                },
+            ),
+            cx.observe(settings, |this, settings, cx| {
+                let enabled = settings.read(cx).discord_presence();
+                if enabled == this.enabled {
+                    return;
+                }
+                this.enabled = enabled;
+                if !enabled {
+                    this.clear();
+                } else if let Some(id) = this.running_build(cx) {
+                    // Turning the toggle on shows an already running game.
+                    this.show(id, cx);
+                }
+            }),
+        ];
+        Self {
+            handle,
+            enabled: settings.read(cx).discord_presence(),
+            instances,
+            shown: None,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn running_build(&self, cx: &gpui_kit::App) -> Option<InstanceId> {
+        let instances = self.instances.read(cx);
+        instances
+            .recent_profiles()
+            .into_iter()
+            .find(|profile| {
+                matches!(
+                    instances.runtime(&profile.id),
+                    InstanceRuntime::Running { .. }
+                )
+            })
+            .map(|profile| profile.id)
+    }
+
+    fn show(&mut self, id: InstanceId, cx: &gpui_kit::App) {
+        if !self.enabled {
+            return;
+        }
+        let instances = self.instances.read(cx);
+        let Some(profile) = instances.profile(id) else {
+            return;
+        };
+        if !matches!(instances.runtime(&id), InstanceRuntime::Running { .. }) {
+            return;
+        }
+        self.shown = Some(id);
+        self.handle.set_activity(PresenceActivity {
+            details: profile.name.clone(),
+            // Build covers (Modrinth/CurseForge metadata) win over the
+            // per-loader icons uploaded to the Discord application.
+            icon: Some(profile.modpack_icon.clone().map_or_else(
+                || PresenceIcon::from_loader(profile.loader),
+                PresenceIcon::Url,
+            )),
+            start_unix: unix_now(),
+        });
+    }
+
+    fn clear(&mut self) {
+        self.shown = None;
+        self.handle.clear();
+    }
+}
+
+/// Unix seconds right now, or `0` when the clock is unavailable.
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0)
+}
+
 /// Owns the Discord IPC connection for as long as the receiver lives.
 /// Connects lazily on the first status update and reconnects after failures;
 /// commands sent while Discord is not running are simply dropped.
 pub async fn run(mut commands: UnboundedReceiver<PresenceCommand>) {
     let Some(application_id) = application_id() else {
-        tracing::warn!(
-            "Discord Rich Presence is disabled: set DISCORD_APPLICATION_ID in \
-             features/rich_presence.rs to an application ID from \
-             discord.com/developers"
-        );
+        tracing::warn!("Discord Rich Presence is disabled: this build has no ORBMC_DISCORD_APP_ID");
         return;
     };
 
@@ -130,8 +236,9 @@ pub async fn run(mut commands: UnboundedReceiver<PresenceCommand>) {
 
 /// Resolve and validate the baked-in application ID.
 fn application_id() -> Option<&'static str> {
-    let id = DISCORD_APPLICATION_ID.trim();
-    (!id.is_empty()).then_some(id)
+    DISCORD_APPLICATION_ID
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
 }
 
 /// Sends `activity` through `client`, reconnecting when the pipe has died or

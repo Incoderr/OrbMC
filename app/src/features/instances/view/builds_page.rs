@@ -1,13 +1,15 @@
-use crate::app::LauncherApp;
-use crate::app::theme::Palette;
-use crate::app::ui::*;
+use super::DetailsTab;
+use super::widgets::*;
+use super::{InstancesView, InstancesViewEvent};
 use crate::features::instances::*;
 use crate::features::mods::*;
 use crate::features::settings::*;
 use crate::features::versions::*;
-use crate::router::Page;
+use crate::shared::theme::Palette;
+use crate::shared::ui::selectable;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, Disableable, StyledExt};
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::Button as ComponentButton;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::switch::Switch;
@@ -15,7 +17,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-impl LauncherApp {
+impl InstancesView {
     pub(crate) fn instances_page(
         &self,
         palette: Palette,
@@ -24,6 +26,7 @@ impl LauncherApp {
     ) -> AnyElement {
         let profiles = self
             .instances
+            .read(cx)
             .profiles()
             .iter()
             .map(|profile| self.instance_card(profile, palette, locale, cx))
@@ -41,14 +44,15 @@ impl LauncherApp {
             .child(
                 div().h_flex().w_full().items_center().justify_end().child(
                     UiButton::new("instances-create-build")
+                        .cursor_pointer()
                         .px_3()
                         .py_2()
                         .rounded(px(8.))
                         .bg(rgb(palette.accent))
                         .text_color(rgb(palette.accent_foreground))
                         .hover(|style| style.opacity(0.9))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_version_picker(window, cx);
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(InstancesViewEvent::CreateBuild);
                         }))
                         .child(
                             div()
@@ -89,6 +93,7 @@ impl LauncherApp {
     ) -> AnyElement {
         let cards = self
             .instances
+            .read(cx)
             .recent_profiles()
             .into_iter()
             .map(|profile| self.instance_card(profile, palette, locale, cx))
@@ -119,11 +124,15 @@ impl LauncherApp {
         locale: Locale,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let runtime = self.instances.runtime(&profile.id);
+        let runtime = self.instances.read(cx).runtime(&profile.id);
         let is_busy = runtime.is_busy();
         let is_installed = profile.installed_version_id.is_some();
         let install_paused = matches!(&runtime, InstanceRuntime::Installing { paused: true, .. });
         let install_active = matches!(&runtime, InstanceRuntime::Installing { .. });
+        let transfer_active = matches!(
+            &runtime,
+            InstanceRuntime::DownloadingMod { .. } | InstanceRuntime::DownloadingContent { .. }
+        );
         let mut install_progress = None;
         let (status_text, status_detail, action_text) = match &runtime {
             InstanceRuntime::NotInstalled => (
@@ -183,18 +192,46 @@ impl LauncherApp {
                     },
                 )
             }
-            InstanceRuntime::DownloadingMod { name } => (
-                locale.text("Скачивание мода", "Downloading mod").to_owned(),
-                name.clone(),
-                locale.text("Скачивание…", "Downloading…"),
-            ),
-            InstanceRuntime::DownloadingContent { name } => (
-                locale
-                    .text("Установка контента", "Installing content")
-                    .to_owned(),
-                name.clone(),
-                locale.text("Скачивание…", "Downloading…"),
-            ),
+            InstanceRuntime::DownloadingMod { name, transfer }
+            | InstanceRuntime::DownloadingContent { name, transfer } => {
+                let progress = transfer.progress();
+                install_progress = install_progress_view(
+                    progress.received,
+                    progress.total,
+                    progress.speed_bps,
+                    0,
+                    None,
+                    palette,
+                    locale,
+                );
+                let mut detail = name.clone();
+                if let Some((done, total)) = progress.files {
+                    detail.push_str(&format!(
+                        " · {done} / {total} {}",
+                        locale.text("файлов", "files")
+                    ));
+                }
+                if progress.received > 0 {
+                    detail.push_str(&format!(" · {}", format_bytes(progress.received)));
+                    if let Some(total) = progress.total {
+                        detail.push_str(&format!(" / {}", format_bytes(total)));
+                    }
+                }
+                if progress.speed_bps > 0. {
+                    detail.push_str(&format!(" · {}", format_speed(progress.speed_bps)));
+                }
+                (
+                    if matches!(&runtime, InstanceRuntime::DownloadingMod { .. }) {
+                        locale.text("Скачивание мода", "Downloading mod").to_owned()
+                    } else {
+                        locale
+                            .text("Установка контента", "Installing content")
+                            .to_owned()
+                    },
+                    detail,
+                    locale.text("Скачивание…", "Downloading…"),
+                )
+            }
             InstanceRuntime::ContentDownloadFailed { message } => (
                 locale
                     .text(
@@ -352,7 +389,10 @@ impl LauncherApp {
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(rgb(palette.foreground))
-                                    .child(profile.name.clone()),
+                                    .child(selectable(
+                                        format!("build-name-{profile_id}"),
+                                        profile.name.clone(),
+                                    )),
                             )
                             .child(
                                 div()
@@ -380,11 +420,18 @@ impl LauncherApp {
             )
             .children(install_progress)
             .when(!status_detail.is_empty(), |card| {
+                // Crash output can be long: it scrolls and can be copied.
                 card.child(
                     div()
+                        .id(format!("build-status-{profile_id}"))
+                        .max_h(px(160.))
+                        .overflow_y_scroll()
                         .text_size(px(11.))
                         .text_color(rgb(palette.muted))
-                        .child(status_detail),
+                        .child(selectable(
+                            format!("build-status-text-{profile_id}"),
+                            status_detail,
+                        )),
                 )
             })
             .child(
@@ -404,6 +451,7 @@ impl LauncherApp {
                             .to_owned();
                         row.child(
                             UiButton::new(format!("pause-instance-{profile_id}"))
+                                .cursor_pointer()
                                 .px_3()
                                 .py_2()
                                 .rounded(px(8.))
@@ -416,9 +464,13 @@ impl LauncherApp {
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     let applied = if install_paused {
-                                        this.instances.resume_install(profile_id)
+                                        this.instances.update(cx, |instances, _| {
+                                            instances.resume_install(profile_id)
+                                        })
                                     } else {
-                                        this.instances.pause_install(profile_id)
+                                        this.instances.update(cx, |instances, _| {
+                                            instances.pause_install(profile_id)
+                                        })
                                     };
                                     if applied {
                                         cx.notify();
@@ -432,6 +484,7 @@ impl LauncherApp {
                         )
                         .child(
                             UiButton::new(format!("cancel-instance-{profile_id}"))
+                                .cursor_pointer()
                                 .px_3()
                                 .py_2()
                                 .rounded(px(8.))
@@ -443,7 +496,36 @@ impl LauncherApp {
                                     Tooltip::new(cancel_label.clone()).build(window, cx)
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if this.instances.cancel_install(profile_id) {
+                                    if this.instances.update(cx, |instances, _| {
+                                        instances.cancel_install(profile_id)
+                                    }) {
+                                        cx.notify();
+                                    }
+                                }))
+                                .child(IconName::CircleX),
+                        )
+                    })
+                    .when(transfer_active, |row| {
+                        let cancel_label = locale
+                            .text("Отменить загрузку", "Cancel download")
+                            .to_owned();
+                        row.child(
+                            UiButton::new(format!("cancel-transfer-{profile_id}"))
+                                .cursor_pointer()
+                                .px_3()
+                                .py_2()
+                                .rounded(px(8.))
+                                .bg(rgb(palette.control))
+                                .text_color(rgb(palette.muted))
+                                .hover(|style| style.bg(rgb(palette.hover)))
+                                .accessibility_label(cancel_label.clone())
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(cancel_label.clone()).build(window, cx)
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if this.instances.update(cx, |instances, _| {
+                                        instances.cancel_transfer(profile_id)
+                                    }) {
                                         cx.notify();
                                     }
                                 }))
@@ -452,6 +534,7 @@ impl LauncherApp {
                     })
                     .child(
                         UiButton::new(format!("open-instance-folder-{profile_id}"))
+                            .cursor_pointer()
                             .px_3()
                             .py_2()
                             .rounded(px(8.))
@@ -460,13 +543,14 @@ impl LauncherApp {
                             .hover(|style| style.bg(rgb(palette.hover)))
                             .accessibility_label(folder_label)
                             .tooltip(move |window, cx| Tooltip::new(folder_label).build(window, cx))
-                            .on_click(cx.listener(move |this, _, _, _| {
-                                this.open_profile_directory(profile_id);
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_profile_directory(profile_id, cx);
                             }))
                             .child(IconName::FolderOpen),
                     )
                     .child(
                         UiButton::new(format!("add-mods-instance-{profile_id}"))
+                            .cursor_pointer()
                             .px_3()
                             .py_2()
                             .rounded(px(8.))
@@ -474,9 +558,11 @@ impl LauncherApp {
                             .text_color(rgb(palette.foreground))
                             .hover(|style| style.bg(rgb(palette.hover)))
                             .disabled(is_busy)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.mods.select_profile(profile_id, mod_filter.clone());
-                                this.navigate_to(Page::Mods, window, cx);
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.catalog.update(cx, |catalog, _| {
+                                    catalog.select_profile(profile_id, mod_filter.clone())
+                                });
+                                cx.emit(InstancesViewEvent::OpenCatalog);
                             }))
                             .child(
                                 div()
@@ -489,6 +575,7 @@ impl LauncherApp {
                     )
                     .child(
                         UiButton::new(format!("open-instance-{profile_id}"))
+                            .cursor_pointer()
                             .px_3()
                             .py_2()
                             .rounded(px(8.))
@@ -498,8 +585,8 @@ impl LauncherApp {
                             .accessibility_label(
                                 locale.text("Открыть страницу сборки", "Open build page"),
                             )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.navigate_to(Page::InstanceDetails(profile_id), window, cx);
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.emit(InstancesViewEvent::OpenBuild(profile_id));
                             }))
                             .child(
                                 div()
@@ -512,6 +599,7 @@ impl LauncherApp {
                     )
                     .child(
                         UiButton::new(format!("play-instance-{profile_id}"))
+                            .cursor_pointer()
                             .px_4()
                             .py_2()
                             .rounded(px(8.))
@@ -537,12 +625,13 @@ impl LauncherApp {
                     )
                     .when(
                         is_installed
-                            && rs_mc_launcher_core::minecraft::quick_play::potentially_supported(
+                            && orbmc_core::minecraft::quick_play::potentially_supported(
                                 &profile.game_version,
                             ),
                         |row| {
                             row.child(
                                 ComponentButton::new(format!("world-instance-{profile_id}"))
+                                    .cursor_pointer()
                                     .outline()
                                     .label(locale.text("В мир…", "World…"))
                                     .disabled(is_busy)
@@ -554,6 +643,7 @@ impl LauncherApp {
                     )
                     .child(
                         UiButton::new(format!("settings-instance-{profile_id}"))
+                            .cursor_pointer()
                             .px_3()
                             .py_2()
                             .rounded(px(8.))
@@ -567,6 +657,7 @@ impl LauncherApp {
                     )
                     .child(
                         UiButton::new(format!("delete-instance-{profile_id}"))
+                            .cursor_pointer()
                             .px_3()
                             .py_2()
                             .rounded(px(8.))
@@ -583,23 +674,23 @@ impl LauncherApp {
             .into_any_element()
     }
 }
-impl LauncherApp {
+impl InstancesView {
     /// Build details page: metadata of the build and its installed mods with
     /// enable/disable switches.
     pub(crate) fn instance_details_page(
         &self,
-        profile_id: uuid::Uuid,
+        profile_id: crate::features::instances::InstanceId,
         palette: Palette,
         locale: Locale,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let Some(profile) = self.instances.profile(profile_id) else {
-            return self.empty_page(palette, locale);
+        let Some(profile) = self.instances.read(cx).profile(profile_id) else {
+            return crate::shared::ui::empty_page(palette, locale);
         };
         let profile = profile.clone();
-        let runtime = self.instances.runtime(&profile_id);
+        let runtime = self.instances.read(cx).runtime(&profile_id);
         let is_busy = runtime.is_busy();
-        let scan_loading = self.mods.installed.is_loading(profile_id);
+        let scan_loading = self.catalog.read(cx).is_scanning(profile_id);
         let loader = loader_title(profile.loader);
         let loader_version = profile.loader_version.as_deref().unwrap_or("");
         let details = if profile.loader == LoaderChoice::Vanilla {
@@ -610,9 +701,11 @@ impl LauncherApp {
                 profile.game_version
             )
         };
-        let entries: Vec<installed::InstalledModEntry> = self.mods.build_mods(profile_id).to_vec();
+        let entries: Vec<installed::InstalledModEntry> =
+            self.catalog.read(cx).build_mods(profile_id).to_vec();
 
         let back_button = UiButton::new("instance-details-back")
+            .cursor_pointer()
             .px_2()
             .py_2()
             .rounded(px(7.))
@@ -620,8 +713,8 @@ impl LauncherApp {
             .text_color(rgb(palette.muted))
             .hover(|style| style.bg(rgb(palette.hover)))
             .accessibility_label(locale.text("Назад к сборкам", "Back to builds"))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.navigate_to(Page::Instances, window, cx);
+            .on_click(cx.listener(move |_, _, _, cx| {
+                cx.emit(InstancesViewEvent::OpenBuilds);
             }))
             .child(
                 div()
@@ -644,13 +737,22 @@ impl LauncherApp {
             .map(|entry| {
                 let row_filename = entry.filename.clone();
                 let disabled = entry.disabled;
+                // Display name falls back to the file name for legacy
+                // records, so the list never shows an empty label.
+                let display_name = entry.name.clone().filter(|name| !name.trim().is_empty());
+                let author = entry.author.clone().filter(|name| !name.trim().is_empty());
+                let version = entry
+                    .version
+                    .clone()
+                    .filter(|label| !label.trim().is_empty());
+
                 // Controlled switch: `checked` is the enabled state; the
                 // handler receives the requested new value.
                 let switch_owner = cx.entity().downgrade();
                 let switch_filename = row_filename.clone();
                 let toggle = Switch::new(format!(
                     "mod-switch-{}-{row_filename}",
-                    profile_id.as_simple()
+                    profile_id.uuid().as_simple()
                 ))
                 .checked(!disabled)
                 .disabled(is_busy || scan_loading)
@@ -666,64 +768,148 @@ impl LauncherApp {
                     let Some(owner) = switch_owner.upgrade() else {
                         return;
                     };
-                    let _ = owner.update(cx, |this, cx| {
-                        this.toggle_mod_disabled(
-                            profile_id,
-                            switch_filename.clone(),
-                            !*checked,
-                            cx,
-                        );
+                    owner.update(cx, |this, cx| {
+                        this.catalog.update(cx, |catalog, cx| {
+                            catalog.toggle_mod_disabled(
+                                profile_id,
+                                switch_filename.clone(),
+                                !*checked,
+                                cx,
+                            )
+                        });
                     });
                 });
 
-                // A jar file can serve several catalog projects; each gets its
-                // delete action.
-                let uninstalls = entry.projects.iter().map(|project| {
-                    let project = project.clone();
-                    let remove_label = locale
-                        .text("Удалить из сборки", "Remove from build")
-                        .to_owned();
-                    UiButton::new(format!("unbuild-mod-{}-{project}", profile_id.as_simple()))
-                        .px_2()
-                        .py_2()
-                        .rounded(px(6.))
-                        .bg(rgb(palette.control))
-                        .text_color(rgb(0xef6a65))
-                        .hover(|style| style.bg(rgb(0x3b1b1b)))
-                        .disabled(is_busy || scan_loading)
-                        .accessibility_label(remove_label.clone())
-                        .tooltip(move |window, cx| {
-                            Tooltip::new(remove_label.clone()).build(window, cx)
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.uninstall_mod(project.clone(), profile_id, cx);
-                        }))
-                        .child(IconName::Delete)
-                        .into_any_element()
-                });
+                // One delete action per row, by file name: catalog-recorded
+                // jars and hand-added mods are removed the same way, and the
+                // identical action block keeps the columns aligned.
+                let removal_label = locale
+                    .text("Удалить из сборки", "Remove from build")
+                    .to_owned();
+                let removal_filename = row_filename.clone();
+                let uninstalls = [UiButton::new(format!(
+                    "unbuild-mod-{}-{row_filename}",
+                    profile_id.uuid().as_simple()
+                ))
+                .cursor_pointer()
+                .px_2()
+                .py_2()
+                .rounded(px(6.))
+                .bg(rgb(palette.control))
+                .text_color(rgb(0xef6a65))
+                .hover(|style| style.bg(rgb(0x3b1b1b)))
+                .disabled(is_busy || scan_loading)
+                .accessibility_label(removal_label.clone())
+                .tooltip(move |window, cx| Tooltip::new(removal_label.clone()).build(window, cx))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.catalog.update(cx, |catalog, cx| {
+                        catalog.uninstall_mod(removal_filename.clone(), profile_id, cx)
+                    });
+                }))
+                .child(IconName::Delete)
+                .into_any_element()];
+
+                let (label_color, sub_color) = if disabled {
+                    (palette.muted, palette.muted)
+                } else {
+                    (palette.foreground, palette.muted)
+                };
+                let icon = mod_row_icon(
+                    entry.icon_url.as_deref(),
+                    entry.icon_path.as_deref(),
+                    palette,
+                );
+                let identity = div()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(label_color))
+                            .truncate()
+                            .child(display_name.unwrap_or(mod_title_fallback(&row_filename))),
+                    )
+                    .when_some(author, |block, author| {
+                        let author_name = author.clone();
+                        block.child(
+                            UiButton::new(format!(
+                                "mod-author-{}-{row_filename}",
+                                profile_id.uuid().as_simple()
+                            ))
+                            .cursor_pointer()
+                            .h_flex()
+                            .items_center()
+                            .gap_1p5()
+                            .text_size(px(11.))
+                            .text_color(rgb(sub_color))
+                            .hover(|style| style.text_color(rgb(palette.accent)))
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(
+                                    locale
+                                        .text("Все проекты автора", "All projects by this author"),
+                                )
+                                .build(window, cx)
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let name = author_name.clone();
+                                this.catalog
+                                    .update(cx, |catalog, _| catalog.filter_by_author(name));
+                                cx.emit(InstancesViewEvent::OpenCatalog);
+                            }))
+                            .child(IconName::CircleUser)
+                            .child(div().min_w_0().truncate().child(author)),
+                        )
+                    });
+                let release = div()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_0p5()
+                    .when_some(version.clone(), |block, version| {
+                        block
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(label_color))
+                                    .truncate()
+                                    .child(version),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(sub_color))
+                                    .truncate()
+                                    .child(row_filename.clone()),
+                            )
+                    })
+                    .when(version.is_none(), |block| {
+                        // Unknown version: the file name is the only label
+                        // the user can rely on.
+                        block.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(sub_color))
+                                .truncate()
+                                .child(row_filename.clone()),
+                        )
+                    });
 
                 div()
                     .h_flex()
                     .w_full()
                     .items_center()
-                    .gap_2()
+                    .gap_3()
                     .px_3()
                     .py_2()
                     .rounded(px(8.))
                     .bg(rgb(palette.background))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_size(px(12.))
-                            .text_color(rgb(if disabled {
-                                palette.muted
-                            } else {
-                                palette.foreground
-                            }))
-                            .truncate()
-                            .child(entry.filename.clone()),
-                    )
+                    .child(icon)
+                    .child(identity)
+                    .child(release)
                     .children(uninstalls)
                     .child(toggle)
                     .into_any_element()
@@ -754,7 +940,10 @@ impl LauncherApp {
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(rgb(palette.foreground))
                                     .truncate()
-                                    .child(profile.name.clone()),
+                                    .child(selectable(
+                                        format!("build-title-{profile_id}"),
+                                        profile.name.clone(),
+                                    )),
                             )
                             .child(
                                 div()
@@ -773,6 +962,7 @@ impl LauncherApp {
                             // Keep the shared card actions close at hand.
                             .child(
                                 UiButton::new(format!("details-folder-instance-{profile_id}"))
+                                    .cursor_pointer()
                                     .px_2()
                                     .py_2()
                                     .rounded(px(7.))
@@ -783,13 +973,14 @@ impl LauncherApp {
                                     .tooltip(move |window, cx| {
                                         Tooltip::new(folder_label).build(window, cx)
                                     })
-                                    .on_click(cx.listener(move |this, _, _, _| {
-                                        this.open_profile_directory(profile_id);
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.open_profile_directory(profile_id, cx);
                                     }))
                                     .child(IconName::FolderOpen),
                             )
                             .child(
                                 UiButton::new(format!("details-play-instance-{profile_id}"))
+                                    .cursor_pointer()
                                     .px_4()
                                     .py_2()
                                     .rounded(px(7.))
@@ -811,52 +1002,295 @@ impl LauncherApp {
                     .min_h_0()
                     .min_w_0()
                     .gap_2()
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(palette.foreground))
-                            .child(locale.text("Установленные моды", "Installed mods")),
-                    )
-                    .when(rows.is_empty(), |section| {
-                        section.child(
-                            div()
-                                .w_full()
-                                .p_6()
-                                .rounded(px(10.))
-                                .bg(rgb(palette.surface))
-                                .border_1()
-                                .border_color(rgb(palette.border))
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.muted))
-                                .when(scan_loading, |panel| {
-                                    panel.child(locale.text(
-                                        "Проверяем папку модов…",
-                                        "Checking the mods directory…",
-                                    ))
-                                })
-                                .when(!scan_loading, |panel| {
-                                    panel.child(locale.text(
-                                        "Моды ещё не установлены. Добавьте их из каталога.",
-                                        "No mods installed yet. Add them from the catalog.",
-                                    ))
-                                }),
-                        )
+                    .child(self.details_tabs(profile_id, rows.len(), palette, locale, cx))
+                    .when(self.details_tab == DetailsTab::Log, |section| {
+                        section.child(self.game_log_panel(profile_id, palette, locale, cx))
                     })
-                    .when(!rows.is_empty(), |section| {
-                        section.child(
-                            div()
-                                .v_flex()
-                                .flex_1()
-                                .min_h_0()
-                                .min_w_0()
-                                .pr_4()
-                                .overflow_y_scrollbar()
-                                .gap_2()
-                                .children(rows),
-                        )
-                    }),
+                    .when(
+                        self.details_tab == DetailsTab::Mods && rows.is_empty(),
+                        |section| {
+                            section.child(
+                                div()
+                                    .w_full()
+                                    .p_6()
+                                    .rounded(px(10.))
+                                    .bg(rgb(palette.surface))
+                                    .border_1()
+                                    .border_color(rgb(palette.border))
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette.muted))
+                                    .when(scan_loading, |panel| {
+                                        panel.child(locale.text(
+                                            "Проверяем папку модов…",
+                                            "Checking the mods directory…",
+                                        ))
+                                    })
+                                    .when(!scan_loading, |panel| {
+                                        panel.child(locale.text(
+                                            "Моды ещё не установлены. Добавьте их из каталога.",
+                                            "No mods installed yet. Add them from the catalog.",
+                                        ))
+                                    }),
+                            )
+                        },
+                    )
+                    .when(
+                        self.details_tab == DetailsTab::Mods && !rows.is_empty(),
+                        |section| {
+                            section.child(
+                                div()
+                                    .v_flex()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .min_w_0()
+                                    .pr_4()
+                                    .overflow_y_scrollbar()
+                                    .gap_2()
+                                    .children(rows),
+                            )
+                        },
+                    ),
             )
             .into_any_element()
     }
+}
+
+impl InstancesView {
+    /// "Mods" / "Log" switch of a build's page.
+    fn details_tabs(
+        &self,
+        profile_id: InstanceId,
+        mod_count: usize,
+        palette: Palette,
+        locale: Locale,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let running = matches!(
+            self.instances.read(cx).runtime(&profile_id),
+            InstanceRuntime::Running { .. }
+        );
+        let tab = |tab: DetailsTab, label: String| {
+            let active = self.details_tab == tab;
+            UiButton::new(format!("build-tab-{tab:?}"))
+                .cursor_pointer()
+                .px_3()
+                .py_1p5()
+                .rounded(px(7.))
+                .bg(rgb(if active {
+                    palette.selected
+                } else {
+                    palette.background
+                }))
+                .text_size(px(13.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(if active {
+                    palette.foreground
+                } else {
+                    palette.muted
+                }))
+                .hover(|style| style.bg(rgb(palette.hover)))
+                .selected(active)
+                .on_click(cx.listener(move |this, _, _, cx| this.set_details_tab(tab, cx)))
+                .child(label)
+        };
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .child(tab(
+                DetailsTab::Mods,
+                format!("{} · {mod_count}", locale.text("Моды", "Mods")),
+            ))
+            .child(tab(
+                DetailsTab::Log,
+                if running {
+                    format!("{} ●", locale.text("Журнал", "Log"))
+                } else {
+                    locale.text("Журнал", "Log").to_owned()
+                },
+            ))
+            .into_any_element()
+    }
+
+    /// Live output of the game with copy, clear and follow controls.
+    fn game_log_panel(
+        &self,
+        profile_id: InstanceId,
+        palette: Palette,
+        locale: Locale,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let text = self
+            .log_text
+            .as_ref()
+            .filter(|(id, _, _)| *id == profile_id)
+            .map(|(_, _, text)| text.clone())
+            .unwrap_or_default();
+        let tool = |id: &str, icon: IconName, label: &'static str, active: bool| {
+            UiButton::new(format!("{id}-{profile_id}"))
+                .cursor_pointer()
+                .px_2()
+                .py_1p5()
+                .rounded(px(6.))
+                .bg(rgb(if active {
+                    palette.selected
+                } else {
+                    palette.control
+                }))
+                .text_color(rgb(if active {
+                    palette.accent
+                } else {
+                    palette.muted
+                }))
+                .hover(|style| style.bg(rgb(palette.hover)))
+                .accessibility_label(label)
+                .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+                .child(icon)
+        };
+        let toolbar = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette.muted))
+                    .child(locale.text(
+                        "Вывод игры за последний запуск",
+                        "Game output of the latest launch",
+                    )),
+            )
+            .child(
+                tool(
+                    "log-follow",
+                    IconName::ArrowDown,
+                    locale.text("Прокручивать к новым строкам", "Follow new lines"),
+                    self.log_follow,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_log_follow(cx))),
+            )
+            .child(
+                tool(
+                    "log-copy",
+                    IconName::Copy,
+                    locale.text("Скопировать весь журнал", "Copy the whole log"),
+                    false,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.copy_log(profile_id, cx))),
+            )
+            .child(
+                tool(
+                    "log-clear",
+                    IconName::Delete,
+                    locale.text("Очистить", "Clear"),
+                    false,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.instances.update(cx, |instances, cx| {
+                        instances.clear_game_log(profile_id);
+                        cx.notify();
+                    });
+                })),
+            )
+            .child(
+                tool(
+                    "log-folder",
+                    IconName::FolderOpen,
+                    locale.text("Папка логов Minecraft", "Minecraft log folder"),
+                    false,
+                )
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.open_log_directory(profile_id, cx)),
+                ),
+            );
+        let body = if text.is_empty() {
+            div()
+                .p_4()
+                .text_size(px(12.))
+                .text_color(rgb(palette.muted))
+                .child(locale.text(
+                    "Журнал пуст. Запусти игру: здесь появится всё, что она пишет.",
+                    "The log is empty. Launch the game and its output appears here.",
+                ))
+                .into_any_element()
+        } else {
+            selectable(format!("game-log-{profile_id}"), text).into_any_element()
+        };
+        div()
+            .v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap_2()
+            .child(toolbar)
+            .child(
+                div()
+                    .id(format!("game-log-scroll-{profile_id}"))
+                    .flex_1()
+                    .min_h_0()
+                    .p_3()
+                    .rounded(px(10.))
+                    .bg(rgb(palette.surface))
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.log_scroll)
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(px(12.))
+                    .text_color(rgb(palette.foreground))
+                    .child(body),
+            )
+            .into_any_element()
+    }
+}
+
+/// Small square cover of one installed mod: the provider icon when the
+/// catalog knows the project, else the icon extracted from the jar itself,
+/// else a puzzle fallback tile.
+fn mod_row_icon(
+    icon_url: Option<&str>,
+    icon_path: Option<&std::path::Path>,
+    palette: Palette,
+) -> AnyElement {
+    let size = px(34.);
+    let background = palette.control;
+    let foreground = palette.muted;
+    let fallback = move || mod_icon_placeholder(IconName::Package, background, foreground, size);
+    let icon_element = |source: ImageSource| {
+        div()
+            .w(size)
+            .h(size)
+            .rounded(px(8.))
+            .overflow_hidden()
+            .bg(rgb(background))
+            .child(
+                img(source)
+                    .size_full()
+                    .object_fit(ObjectFit::Cover)
+                    .rounded(px(8.))
+                    .with_loading(fallback)
+                    .with_fallback(fallback),
+            )
+            .into_any_element()
+    };
+    match (icon_url, icon_path) {
+        (Some(url), _) => icon_element(url.into()),
+        (None, Some(path)) => icon_element(path.to_path_buf().into()),
+        (None, None) => {
+            mod_icon_placeholder(IconName::Package, background, foreground, size).into_any_element()
+        }
+    }
+}
+
+/// A record without a stored project name falls back to its file name as the
+/// row title; the `.jar` extension says nothing there.
+fn mod_title_fallback(filename: &str) -> String {
+    let at = filename.len().saturating_sub(4);
+    let stem = match filename.get(at..) {
+        // `get` also rejects a byte boundary inside a multi-byte character,
+        // which can never be a `.jar` suffix anyway.
+        Some(suffix) if suffix.eq_ignore_ascii_case(".jar") && at > 0 => &filename[..at],
+        _ => filename,
+    };
+    stem.to_owned()
 }

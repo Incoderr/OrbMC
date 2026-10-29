@@ -1,35 +1,38 @@
-use crate::app::LauncherApp;
+use super::InstancesView;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::Button as ComponentButton;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::*;
 
-impl LauncherApp {
+impl InstancesView {
     pub(crate) fn open_world_picker(
         &mut self,
-        id: uuid::Uuid,
+        id: crate::features::instances::InstanceId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         use crate::features::worlds::WorldList;
-        let Some(profile) = self.instances.profile(id).cloned() else {
+        let Some(profile) = self.instances.read(cx).profile(id).cloned() else {
             return;
         };
-        let locale = self.settings.locale();
+        let locale = self.locale;
         let title = format!(
             "{} · {}",
             locale.text("Войти в мир", "Play a world"),
             profile.name
         );
-        self.instances.set_worlds(id, WorldList::Loading);
+        self.instances.update(cx, |instances, _| {
+            instances.set_worlds(id, WorldList::Loading)
+        });
         let task = cx
             .background_executor()
             .spawn(async move { crate::features::worlds::load(profile) });
         cx.spawn(async move |this, cx| {
             let worlds = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.instances.set_worlds(id, worlds);
+                this.instances
+                    .update(cx, |instances, _| instances.set_worlds(id, worlds));
                 cx.notify();
             });
         })
@@ -40,7 +43,7 @@ impl LauncherApp {
             dialog.title(title.clone()).content(move |content, _, cx| {
                 let worlds = owner
                     .upgrade()
-                    .map(|owner| owner.read(cx).instances.worlds(id));
+                    .map(|owner| owner.read(cx).instances.read(cx).worlds(id));
                 let body = match worlds {
                     Some(WorldList::Ready(worlds)) if !worlds.is_empty() => div()
                         .v_flex()
@@ -49,6 +52,7 @@ impl LauncherApp {
                             let owner = owner.clone();
                             let label = world.clone();
                             ComponentButton::new(format!("quick-play-{world}"))
+                                .cursor_pointer()
                                 .outline()
                                 .label(label)
                                 .on_click(move |_, window, cx| {
@@ -81,7 +85,11 @@ impl LauncherApp {
         });
     }
 
-    pub(crate) fn start_profile_launch(&mut self, id: uuid::Uuid, cx: &mut Context<Self>) {
+    pub(crate) fn start_profile_launch(
+        &mut self,
+        id: crate::features::instances::InstanceId,
+        cx: &mut Context<Self>,
+    ) {
         self.launch_into(id, None, cx);
     }
 }

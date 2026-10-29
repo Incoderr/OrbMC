@@ -5,7 +5,7 @@ use gpui_kit::http_client::{
     self, AsyncBody, CustomHeaders, HttpClient, RedirectPolicy, RequestTimeout,
 };
 
-const USER_AGENT: &str = "RS-MC-Launcher/0.1.0";
+const USER_AGENT: &str = concat!("OrbMC/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone)]
 pub struct ReqwestHttpClient {

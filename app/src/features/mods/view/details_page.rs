@@ -1,17 +1,17 @@
-use crate::app::LauncherApp;
-use crate::app::theme::Palette;
-use crate::app::ui::*;
+use super::widgets::*;
+use super::{CatalogEvent, CatalogView};
 use crate::features::mods::catalog::*;
 use crate::features::mods::*;
 use crate::features::settings::*;
-use crate::router::Page;
+use crate::shared::theme::Palette;
+use crate::shared::ui::{empty_page, selectable};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-impl LauncherApp {
+impl CatalogView {
     pub(crate) fn mod_details_page(
         &self,
         palette: Palette,
@@ -19,19 +19,14 @@ impl LauncherApp {
         cx: &Context<Self>,
     ) -> AnyElement {
         let Some(sample) = self.mods.selected_mod() else {
-            return self.empty_page(palette, locale);
+            return empty_page(palette, locale);
         };
         let active_tab = self.mods.detail_tab();
         let project_url = sample.page_url.clone();
         let project_kind = sample.kind;
-        let back_page = match project_kind {
-            ProjectKind::Mod => Page::Mods,
-            ProjectKind::Modpack => Page::Modpacks,
-            ProjectKind::ResourcePack => Page::ResourcePacks,
-            ProjectKind::Shader => Page::Shaders,
-        };
 
         let back_button = UiButton::new("mod-details-back")
+            .cursor_pointer()
             .px_2()
             .py_2()
             .rounded(px(7.))
@@ -39,9 +34,9 @@ impl LauncherApp {
             .text_color(rgb(palette.muted))
             .hover(|style| style.bg(rgb(palette.hover)))
             .accessibility_label(locale.text("Назад в каталог", "Back to catalog"))
-            .on_click(cx.listener(move |this, _, window, cx| {
+            .on_click(cx.listener(move |this, _, _, cx| {
                 this.mods.clear_selected_mod();
-                this.navigate_to(back_page, window, cx);
+                cx.emit(CatalogEvent::BackToCatalog(project_kind));
             }))
             .child(
                 div()
@@ -73,19 +68,7 @@ impl LauncherApp {
             ProjectKind::ResourcePack | ProjectKind::Shader => {
                 self.content_install_action(sample, palette, locale, cx)
             }
-            ProjectKind::Modpack => {
-                let page_url = project_url.clone();
-                UiButton::new(format!("open-project-page-{}", sample.id))
-                    .px_3()
-                    .py_2()
-                    .rounded(px(7.))
-                    .bg(rgb(palette.accent))
-                    .text_color(rgb(palette.accent_foreground))
-                    .hover(|style| style.opacity(0.9))
-                    .on_click(move |_, _, cx| cx.open_url(&page_url))
-                    .child(locale.text("Открыть страницу", "Open project page"))
-                    .into_any_element()
-            }
+            ProjectKind::Modpack => self.modpack_install_action(sample, palette, locale, cx),
         };
 
         let hero = div()
@@ -114,7 +97,7 @@ impl LauncherApp {
                             .w_full()
                             .min_w_0()
                             .truncate()
-                            .child(sample.name.clone()),
+                            .child(selectable("project-title", sample.name.clone())),
                     )
                     .child(
                         div()
@@ -126,7 +109,28 @@ impl LauncherApp {
                             .gap_3()
                             .text_size(px(11.))
                             .text_color(rgb(palette.muted))
-                            .child(sample.author.clone())
+                            .child({
+                                let author_project = sample.clone();
+                                UiButton::new("details-author")
+                                    .cursor_pointer()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .text_color(rgb(palette.muted))
+                                    .hover(|style| style.text_color(rgb(palette.accent)))
+                                    .tooltip(move |window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(locale.text(
+                                            "Все проекты автора",
+                                            "All projects by this author",
+                                        ))
+                                        .build(window, cx)
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.show_author(&author_project, cx);
+                                    }))
+                                    .child(IconName::User)
+                                    .child(sample.author.clone())
+                            })
                             .child(
                                 div()
                                     .h_flex()
@@ -173,6 +177,7 @@ impl LauncherApp {
                     .child(primary_action)
                     .child(
                         UiButton::new(format!("open-mod-page-{}", sample.id))
+                            .cursor_pointer()
                             .px_3()
                             .py_2()
                             .rounded(px(7.))
@@ -204,6 +209,7 @@ impl LauncherApp {
                 };
 
                 UiButton::new(tab.id())
+                    .cursor_pointer()
                     .px_3()
                     .py_2()
                     .rounded(px(7.))
@@ -387,6 +393,7 @@ impl LauncherApp {
                         gpui_kit::component::text::markdown(enlarge_markdown_badges(description))
                     }
                 }
+                .selectable(true)
                 .w_full()
                 .text_size(px(15.))
                 .text_color(rgb(palette.foreground))
@@ -489,6 +496,7 @@ impl LauncherApp {
                 )
                 .child(
                     UiButton::new(format!("download-mod-file-{}", sample.id))
+                        .cursor_pointer()
                         .px_3()
                         .py_2()
                         .rounded(px(7.))
@@ -630,6 +638,7 @@ impl LauncherApp {
                 .gap_2()
                 .child(
                     UiButton::new(format!("mod-gallery-prev-{project_id}"))
+                        .cursor_pointer()
                         .px_3()
                         .py_2()
                         .rounded(px(7.))
@@ -656,6 +665,7 @@ impl LauncherApp {
                 )
                 .child(
                     UiButton::new(format!("mod-gallery-next-{project_id}"))
+                        .cursor_pointer()
                         .px_3()
                         .py_2()
                         .rounded(px(7.))
@@ -673,6 +683,7 @@ impl LauncherApp {
                 .child(div().flex_1())
                 .child(
                     UiButton::new(format!("mod-gallery-fullscreen-{project_id}"))
+                        .cursor_pointer()
                         .px_3()
                         .py_2()
                         .rounded(px(7.))
@@ -793,14 +804,6 @@ impl LauncherApp {
             .child(body)
             .into_any_element()
     }
-
-    pub(crate) fn empty_page(&self, palette: Palette, locale: Locale) -> AnyElement {
-        div()
-            .text_size(px(13.))
-            .text_color(rgb(palette.muted))
-            .child(locale.text("Здесь пока пусто", "Nothing here yet"))
-            .into_any_element()
-    }
 }
 
 /// Small metadata-panel button that opens a project link.
@@ -811,6 +814,7 @@ fn detail_link_button(
     palette: Palette,
 ) -> AnyElement {
     UiButton::new(id)
+        .cursor_pointer()
         .w_full()
         .px_2()
         .py_1()
@@ -915,4 +919,45 @@ fn escape_html_attribute(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+impl CatalogView {
+    pub(crate) fn home_mod_card(
+        &self,
+        sample: &ModSample,
+        palette: Palette,
+        locale: Locale,
+    ) -> AnyElement {
+        div()
+            .v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_3()
+            .p_3()
+            .rounded(px(10.))
+            .bg(rgb(palette.surface))
+            .border_1()
+            .border_color(rgb(palette.border))
+            .child(mod_thumbnail(sample, px(34.)))
+            .child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(palette.foreground))
+                            .child(sample.name),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(palette.muted))
+                            .child(locale.text("от ", "by "))
+                            .child(sample.author),
+                    ),
+            )
+            .into_any_element()
+    }
 }

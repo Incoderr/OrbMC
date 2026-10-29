@@ -1,37 +1,10 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
-use crate::features::instances::{InstanceProfile, OFFLINE_PLAYER_NAME};
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default)]
-pub struct SavedLauncherSettings {
-    pub download_directory: PathBuf,
-    pub locale: String,
-    pub theme: String,
-    pub accent: String,
-    pub hide_to_tray: bool,
-    pub offline_player: String,
-    pub discord_presence: bool,
-}
-
-impl Default for SavedLauncherSettings {
-    fn default() -> Self {
-        Self {
-            download_directory: PathBuf::new(),
-            locale: "ru".to_owned(),
-            theme: "dark".to_owned(),
-            accent: "orange".to_owned(),
-            hide_to_tray: false,
-            offline_player: OFFLINE_PLAYER_NAME.to_owned(),
-            discord_presence: true,
-        }
-    }
-}
-
-pub fn load() -> std::io::Result<Vec<InstanceProfile>> {
+pub fn load<T: DeserializeOwned>() -> std::io::Result<Vec<T>> {
     let path = profiles_path()?;
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -43,16 +16,16 @@ pub fn load() -> std::io::Result<Vec<InstanceProfile>> {
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-pub fn save(profiles: &[InstanceProfile]) -> std::io::Result<()> {
+pub fn save<T: Serialize>(profiles: &[T]) -> std::io::Result<()> {
     write_json_atomically(&profiles_path()?, profiles)
 }
 
-pub fn load_settings() -> std::io::Result<SavedLauncherSettings> {
+pub fn load_settings<T: DeserializeOwned + Default>() -> std::io::Result<T> {
     let path = settings_path()?;
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(SavedLauncherSettings::default());
+            return Ok(T::default());
         }
         Err(error) => return Err(error),
     };
@@ -60,34 +33,12 @@ pub fn load_settings() -> std::io::Result<SavedLauncherSettings> {
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-pub fn save_settings(settings: &SavedLauncherSettings) -> std::io::Result<()> {
+pub fn save_settings<T: Serialize>(settings: &T) -> std::io::Result<()> {
     write_json_atomically(&settings_path()?, settings)
 }
 
 pub fn default_download_directory() -> std::io::Result<PathBuf> {
     data_directory()
-}
-
-pub fn instance_directory(download_directory: &Path, id: uuid::Uuid) -> PathBuf {
-    download_directory.join("instances").join(id.to_string())
-}
-
-pub fn ensure_instance_directory(
-    download_directory: &Path,
-    id: uuid::Uuid,
-) -> std::io::Result<PathBuf> {
-    let path = instance_directory(download_directory, id);
-    std::fs::create_dir_all(&path)?;
-    Ok(path)
-}
-
-pub fn remove_instance_directory(download_directory: &Path, id: uuid::Uuid) -> std::io::Result<()> {
-    let path = instance_directory(download_directory, id);
-    match std::fs::remove_dir_all(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
 }
 
 pub fn shared_game_directory(download_directory: &Path) -> PathBuf {
@@ -125,14 +76,36 @@ pub(crate) fn write_json_atomically<T: Serialize + ?Sized>(
         .map_err(|error| error.error)
 }
 
-pub(crate) fn data_directory() -> std::io::Result<PathBuf> {
-    let root = dirs::data_local_dir()
+/// Maps a path inside the pre-rename data directory (`RS MC Launcher`) onto
+/// the current one. `data_directory` moves that folder, but saved settings
+/// and builds may still point at the old location.
+pub fn relocate_legacy_path(path: &Path) -> Option<PathBuf> {
+    let relative = path
+        .strip_prefix(data_root().ok()?.join(LEGACY_NAME))
+        .ok()?;
+    Some(data_directory().ok()?.join(relative))
+}
+
+const LEGACY_NAME: &str = "RS MC Launcher";
+
+fn data_root() -> std::io::Result<PathBuf> {
+    dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "launcher data directory is unavailable",
             )
-        })?;
-    Ok(root.join("RS MC Launcher"))
+        })
+}
+
+pub(crate) fn data_directory() -> std::io::Result<PathBuf> {
+    let root = data_root()?;
+    let directory = root.join("OrbMC");
+    let legacy = root.join(LEGACY_NAME);
+    if !directory.exists() && legacy.is_dir() {
+        // Keep profiles created before the launcher was renamed.
+        std::fs::rename(&legacy, &directory)?;
+    }
+    Ok(directory)
 }
