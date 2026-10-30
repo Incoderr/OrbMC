@@ -1,6 +1,7 @@
 //! Worker threads that install, launch and remove builds. They talk to the
 //! UI only through [`InstanceWorkerEvent`]s.
 
+use crate::features::auth::{self, PlayerAccount};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -125,6 +126,8 @@ pub enum LaunchError {
     World(#[source] std::io::Error),
     #[error(transparent)]
     Command(LauncherError),
+    #[error(transparent)]
+    Account(#[from] auth::AuthError),
     #[error("Не удалось запустить Java: {0}")]
     Spawn(#[source] std::io::Error),
     #[error("Не удалось прочитать вывод Java: {0}")]
@@ -250,11 +253,11 @@ pub fn launch_profile(
     profile: InstanceProfile,
     minecraft_directory: PathBuf,
     world: Option<String>,
-    player_name: String,
+    player: PlayerAccount,
     events: UnboundedSender<InstanceWorkerEvent>,
 ) {
     let id = profile.id;
-    if let Err(error) = launch(profile, minecraft_directory, world, &player_name, &events) {
+    if let Err(error) = launch(profile, minecraft_directory, world, &player, &events) {
         tracing::warn!(profile_id = %id, %error, "Minecraft launch failed");
         let _ = events.unbounded_send(InstanceWorkerEvent::LaunchFailed {
             id,
@@ -269,7 +272,7 @@ fn launch(
     profile: InstanceProfile,
     minecraft_directory: PathBuf,
     world: Option<String>,
-    player_name: &str,
+    player: &PlayerAccount,
     events: &UnboundedSender<InstanceWorkerEvent>,
 ) -> Result<(), LaunchError> {
     let id = profile.id;
@@ -313,12 +316,30 @@ fn launch(
     let java_executable = resolution.executable.clone();
     let java_probe = resolution.probe;
 
-    let account = Account::offline(match player_name.trim() {
-        name if is_valid_player_name(name) => name.to_owned(),
-        // The persisted name is validated at save time; fall back to a
-        // sensible default if it got corrupted or dropped on disk.
-        _ => OFFLINE_PLAYER_NAME.to_owned(),
-    });
+    let (account, jvm_options) = match player {
+        PlayerAccount::Offline { name } => {
+            let account = Account::offline(match name.trim() {
+                name if is_valid_player_name(name) => name.to_owned(),
+                // The persisted name is validated at save time; fall back to a
+                // sensible default if it got corrupted or dropped on disk.
+                _ => OFFLINE_PLAYER_NAME.to_owned(),
+            });
+            (account, Vec::new())
+        }
+        PlayerAccount::ElyBy(account) => {
+            let session = auth::launch_session(account)?;
+            let injector = auth::authlib_injector()?;
+            // The engine has no Yggdrasil account kind; the Microsoft one
+            // carries the same three launch values.
+            let account = Account::Microsoft {
+                username: session.account.name,
+                uuid: session.account.uuid,
+                access_token: session.access_token,
+            };
+            let agent = format!("-javaagent:{}={}", injector.display(), auth::ELY_BY_API);
+            (account, vec![agent])
+        }
+    };
 
     let quick_play_args = match world {
         Some(world) => {
@@ -350,6 +371,7 @@ fn launch(
         &command.args,
         profile.memory_mb,
         &instance_layout::jvm_log_directory(&data_directory),
+        jvm_options,
         quick_play_args,
     );
     let mut process = Command::new(&command.executable);

@@ -1,3 +1,4 @@
+use crate::features::mods::ProjectKind;
 use crate::platform::profile_store;
 use crate::{
     features::instances::InstancesState,
@@ -86,7 +87,9 @@ impl LauncherApp {
         };
 
         let tray_available = crate::shell::tray::install(window, cx.weak_entity(), cx);
-        let skins = cx.new(|cx| crate::features::skins::SkinsView::new(&settings, cx));
+        let auth = cx.new(|_| crate::features::auth::AuthState::load());
+        let skins =
+            cx.new(|cx| crate::features::skins::SkinsView::new(&settings, auth.clone(), cx));
 
         let version_picker =
             cx.new(|cx| crate::features::versions::VersionPicker::new(&settings, window, cx));
@@ -115,7 +118,7 @@ impl LauncherApp {
                 use crate::features::mods::CatalogEvent;
                 let page = match *event {
                     CatalogEvent::OpenDetails => Page::ModDetails,
-                    CatalogEvent::BackToCatalog(kind) => Page::for_catalog_kind(kind),
+                    CatalogEvent::BackToCatalog => Page::Catalog,
                     CatalogEvent::OpenBuilds => Page::Instances,
                 };
                 this.navigate_to(page, window, cx);
@@ -127,6 +130,7 @@ impl LauncherApp {
                 instances.clone(),
                 catalog.clone(),
                 &settings,
+                auth.clone(),
                 cx,
             )
         });
@@ -137,7 +141,11 @@ impl LauncherApp {
                 use crate::features::instances::InstancesViewEvent;
                 match *event {
                     InstancesViewEvent::CreateBuild => this.open_version_picker(window, cx),
-                    InstancesViewEvent::OpenCatalog => this.navigate_to(Page::Mods, window, cx),
+                    InstancesViewEvent::OpenCatalog => {
+                        this.catalog
+                            .update(cx, |catalog, _| catalog.set_kind(ProjectKind::Mod));
+                        this.navigate_to(Page::Catalog, window, cx)
+                    }
                     InstancesViewEvent::OpenBuild(id) => {
                         this.navigate_to(Page::InstanceDetails(id), window, cx)
                     }
@@ -153,7 +161,13 @@ impl LauncherApp {
         let instances_observer = cx.observe(&instances, |_, _, cx| cx.notify());
 
         let account = cx.new(|cx| {
-            crate::features::auth::AccountView::new(settings.clone(), skins.clone(), window, cx)
+            crate::features::auth::AccountView::new(
+                settings.clone(),
+                auth.clone(),
+                skins.clone(),
+                window,
+                cx,
+            )
         });
         let updater = cx.new(|cx| {
             crate::features::updates::Updater::new(settings.clone(), instances.clone(), cx)
@@ -208,9 +222,8 @@ impl LauncherApp {
         let target = match page {
             Page::ModDetails => CatalogTarget::Details,
             Page::InstanceDetails(id) => CatalogTarget::Build(id),
-            page => page
-                .catalog_kind()
-                .map_or(CatalogTarget::Elsewhere, CatalogTarget::Catalog),
+            Page::Catalog => CatalogTarget::Catalog,
+            _ => CatalogTarget::Elsewhere,
         };
         self.catalog.update(cx, |catalog, cx| {
             catalog.navigated(target, keep_query, window, cx)
@@ -262,11 +275,7 @@ impl Render for LauncherApp {
                 self.builds.update(cx, |builds, cx| builds.show(screen, cx));
                 self.builds.clone().into_any_element()
             }
-            Page::Mods
-            | Page::Modpacks
-            | Page::ResourcePacks
-            | Page::Shaders
-            | Page::ModDetails => self.catalog.clone().into_any_element(),
+            Page::Catalog | Page::ModDetails => self.catalog.clone().into_any_element(),
             Page::Settings => self.settings_view.clone().into_any_element(),
             Page::Skins => self.skins.clone().into_any_element(),
         };
@@ -276,18 +285,9 @@ impl Render for LauncherApp {
                 "Версия игры, загрузчик и установленные моды",
                 "Game version, loader, and installed mods",
             ),
-            Page::Mods => locale.text("", "Find add-ons for your setup"),
-            Page::Modpacks => locale.text(
-                "Готовые сборки модов для Minecraft",
-                "Ready-made Minecraft mod collections",
-            ),
-            Page::ResourcePacks => locale.text(
-                "Измени текстуры и оформление игры",
-                "Change the game's textures and appearance",
-            ),
-            Page::Shaders => locale.text(
-                "Найди шейдеры и измени графику игры",
-                "Find shaders and change the game's visuals",
+            Page::Catalog => locale.text(
+                "Моды, модпаки, текстурпаки и шейдеры",
+                "Mods, modpacks, texture packs, and shaders",
             ),
             Page::Settings => locale.text(
                 "Язык и оформление лаунчера",

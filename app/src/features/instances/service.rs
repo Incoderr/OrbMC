@@ -2,6 +2,7 @@
 //! threads and report back through [`InstanceWorkerEvent`]s, which update the
 //! build state here. Other features follow builds through [`InstanceEvent`].
 
+use crate::features::auth::PlayerAccount;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui_kit::{Context, EventEmitter};
@@ -57,7 +58,7 @@ impl InstancesState {
         &mut self,
         id: InstanceId,
         world: Option<String>,
-        player_name: String,
+        player: PlayerAccount,
         cx: &mut Context<Self>,
     ) {
         if self.runtime(&id).is_busy() {
@@ -76,9 +77,7 @@ impl InstancesState {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         let worker = std::thread::Builder::new()
             .name(format!("launch-minecraft-{id}"))
-            .spawn(move || {
-                launch_profile(profile, minecraft_directory, world, player_name, sender)
-            });
+            .spawn(move || launch_profile(profile, minecraft_directory, world, player, sender));
         match worker {
             Ok(_) => self.listen(receiver, cx),
             Err(error) => self.mark_failed(id, format!("Не удалось запустить игру: {error}")),

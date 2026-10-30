@@ -1,3 +1,4 @@
+pub mod credentials;
 pub mod instance_layout;
 pub mod java;
 pub mod logging;

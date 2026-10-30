@@ -778,6 +778,44 @@ impl CatalogView {
                     )
                 })
         });
+        let kind_tabs = div()
+            .h_flex()
+            .flex_shrink_0()
+            .gap_1()
+            .p_1()
+            .rounded(px(10.))
+            .bg(rgb(palette.surface))
+            .border_1()
+            .border_color(rgb(palette.border))
+            .children(ProjectKind::ALL.map(|kind| {
+                let is_selected = kind == selected_kind;
+                UiButton::new(format!("catalog-kind-{kind:?}"))
+                    .cursor_pointer()
+                    .px_4()
+                    .py_2()
+                    .rounded(px(7.))
+                    .text_size(px(14.))
+                    .bg(rgb(if is_selected {
+                        palette.selected
+                    } else {
+                        palette.surface
+                    }))
+                    .text_color(rgb(if is_selected {
+                        palette.accent
+                    } else {
+                        palette.foreground
+                    }))
+                    .hover(|style| {
+                        style.bg(rgb(if is_selected {
+                            palette.selected_hover
+                        } else {
+                            palette.hover
+                        }))
+                    })
+                    .selected(is_selected)
+                    .on_click(cx.listener(move |this, _, _, cx| this.switch_kind(kind, cx)))
+                    .child(kind.title(locale))
+            }));
         let toolbar = div()
             .h_flex()
             .w_full()
@@ -829,6 +867,7 @@ impl CatalogView {
                     .min_h_0()
                     .min_w_0()
                     .gap_3()
+                    .child(kind_tabs)
                     .child(toolbar)
                     .when(
                         target_filter_chip.is_some() || author_chip.is_some(),

@@ -7,6 +7,7 @@ mod settings_dialog;
 pub(crate) mod widgets;
 mod world_picker;
 
+use crate::features::auth::AuthState;
 use gpui_kit::*;
 
 use super::{InstanceId, InstancesState};
@@ -56,7 +57,9 @@ pub struct InstancesView {
     palette: Palette,
     locale: Locale,
     /// Offline name the game is launched with.
+    /// Offline player name; used when no Ely.by account is selected.
     player_name: String,
+    auth: Entity<AuthState>,
     _subscriptions: [Subscription; 3],
 }
 
@@ -67,6 +70,7 @@ impl InstancesView {
         instances: Entity<InstancesState>,
         catalog: Entity<CatalogView>,
         settings: &Entity<SettingsState>,
+        auth: Entity<AuthState>,
         cx: &mut Context<Self>,
     ) -> Self {
         let (palette, locale, player_name) = {
@@ -93,6 +97,7 @@ impl InstancesView {
             cx.observe(&catalog, |_, _, cx| cx.notify()),
         ];
         Self {
+            auth,
             instances,
             details_tab: DetailsTab::default(),
             log_scroll: ScrollHandle::new(),
@@ -179,10 +184,9 @@ impl InstancesView {
         world: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let player_name = self.player_name.clone();
-        self.instances.update(cx, |instances, cx| {
-            instances.launch(id, world, player_name, cx)
-        });
+        let player = self.auth.read(cx).player_account(&self.player_name);
+        self.instances
+            .update(cx, |instances, cx| instances.launch(id, world, player, cx));
     }
 
     pub(crate) fn open_profile_directory(&self, id: InstanceId, cx: &App) {

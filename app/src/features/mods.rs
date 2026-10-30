@@ -190,6 +190,8 @@ pub enum ProjectKind {
 }
 
 impl ProjectKind {
+    pub const ALL: [Self; 4] = [Self::Mod, Self::Modpack, Self::ResourcePack, Self::Shader];
+
     pub fn title(self, locale: Locale) -> &'static str {
         match self {
             Self::Mod => locale.text("Моды", "Mods"),

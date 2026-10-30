@@ -95,8 +95,8 @@ core / platform / vendor crates
 | `versions` | version/loader catalogs, "Add Minecraft" dialog | `VersionPicker` (+ `CreateProfile`) |
 | `modpacks` | installing Modrinth `.mrpack` packs as new builds (index parsing is in `core::minecraft::mrpack`) | `install_pack`, `ModpackError` |
 | `settings` | launcher settings, `settings.json`, settings page | `SettingsState`, `SettingsView` |
-| `skins` | skin library and 3D preview (in-game skins are not set up by mods) | `SkinsView` |
-| `auth` | account menu; today only the offline player name | `AccountView` |
+| `skins` | skin library and 3D preview; shows the Ely.by skin of the playing account and sends library skins to the Ely.by upload page (Ely.by has no upload API). Offline mode sends no skin to the game | `SkinsView` |
+| `auth` | account menu: offline name or Ely.by accounts (sign-in, token refresh, authlib-injector) | `AuthState`, `AccountView`, `PlayerAccount` |
 | `rich_presence` | Discord status | `DiscordPresence` |
 | `java` | probing, discovering and downloading Java (rules live in `core`) | functions, `JavaError` |
 | `worlds` | world lists for Quick Play | functions |
@@ -169,7 +169,9 @@ These are the conventions the code already follows. Use them for new work.
 ### Data on disk
 
 - Launcher data: `%LOCALAPPDATA%\OrbMC` (`platform::profile_store::data_directory`).
-  `settings.json`, `instances.json`, `skins/`, `translations/`,
+  `settings.json`, `instances.json`, `accounts.json` (Ely.by accounts without
+  tokens; tokens are in the OS credential store via `platform::credentials`),
+  `authlib-injector.jar`, `skins/`, `translations/`,
   `instance-data/<instance id>/`.
 - A build's game directory is `<download dir>/instances/<build name>` with
   `(1)`, `(2)` suffixes for duplicates (`platform::instance_layout`). It holds
@@ -303,12 +305,18 @@ Done:
   files OrbMC fetches itself (mods, resource packs, shaders) go through
   `downloads::download_file` — streaming, size/SHA-1 checks, atomic
   completion, retries, progress and cancellation via `TransferHandle`.
+- Ely.by accounts: password sign-in (with a one-time code for 2FA), token
+  checked and refreshed before every launch, game started with
+  authlib-injector pointing at `ely.by`.
+- Catalog: mods, modpacks, texture packs and shaders share one page
+  (`Page::Catalog`) with kind tabs.
 - Java: the exact major version a game declares is used; if it is not
   installed, the matching Mojang JRE is downloaded. A newer compatible Java
   is only the fallback when that download fails.
 
 Planned (not present yet — do not look for it):
 
-1. **Accounts** (`auth`): Microsoft / Ely.by sign-in with tokens in the OS
-   keyring; authlib-injector for shared skins.
+1. **Accounts** (`auth`): Microsoft sign-in. Ely.by sign-in is done; a
+   local Yggdrasil server in the launcher (LAN, own servers) is still being
+   designed.
 2. Single instance and tray on Linux and macOS.

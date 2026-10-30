@@ -45,6 +45,7 @@ struct SkinIndex {
     selected: Option<SkinId>,
 }
 
+mod ely;
 mod view;
 
 pub use view::SkinsView;
@@ -366,7 +367,7 @@ pub fn decode_skin(bytes: &[u8]) -> Result<image::RgbaImage, String> {
 
 /// Renders the selected skin's face (front head layer plus hat layer) as a
 /// square image for the sidebar account block.
-fn render_head_image(texture: &image::RgbaImage) -> Arc<RenderImage> {
+pub(super) fn render_head_image(texture: &image::RgbaImage) -> Arc<RenderImage> {
     let scale = (texture.width() / 64).max(1);
     let face = texture
         .view(8 * scale, 8 * scale, 8 * scale, 8 * scale)

@@ -38,14 +38,14 @@ use crate::shared::theme::Palette;
 #[derive(Clone, Copy, Debug)]
 pub enum CatalogEvent {
     OpenDetails,
-    BackToCatalog(ProjectKind),
+    BackToCatalog,
     OpenBuilds,
 }
 
 /// Where the user is, as far as the catalog cares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CatalogTarget {
-    Catalog(ProjectKind),
+    Catalog,
     Details,
     Build(InstanceId),
     Elsewhere,
@@ -175,6 +175,23 @@ impl CatalogView {
         cx.notify();
     }
 
+    /// Chooses which kind of content the list shows the next time it opens.
+    pub fn set_kind(&mut self, kind: ProjectKind) {
+        self.mods.set_kind(kind);
+    }
+
+    /// Switches the open list to another kind of content.
+    pub(crate) fn switch_kind(&mut self, kind: ProjectKind, cx: &mut Context<Self>) {
+        if self.mods.kind() == kind {
+            return;
+        }
+        self.mods.set_kind(kind);
+        self.mods_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        self.refresh_installed_mods(cx);
+        self.load_mod_catalog(cx, false);
+        cx.notify();
+    }
+
     /// Follows app navigation. `keep_query` holds the search text while the
     /// user moves between the list and a project page.
     pub fn navigated(
@@ -192,9 +209,8 @@ impl CatalogView {
         self.open_build = None;
         self.mods_scroll.scroll_to_item(0, ScrollStrategy::Top);
         match target {
-            CatalogTarget::Catalog(kind) => {
+            CatalogTarget::Catalog => {
                 self.screen = Screen::List;
-                self.mods.set_kind(kind);
                 self.version_picker
                     .update(cx, |picker, cx| picker.load_version_manifests(cx));
                 self.refresh_installed_mods(cx);
@@ -395,7 +411,7 @@ impl CatalogView {
         self.load_mod_catalog(cx, false);
         if self.screen == Screen::Details {
             self.mods.clear_selected_mod();
-            cx.emit(CatalogEvent::BackToCatalog(project.kind));
+            cx.emit(CatalogEvent::BackToCatalog);
         }
         cx.notify();
     }

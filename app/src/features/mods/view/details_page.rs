@@ -36,7 +36,7 @@ impl CatalogView {
             .accessibility_label(locale.text("Назад в каталог", "Back to catalog"))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.mods.clear_selected_mod();
-                cx.emit(CatalogEvent::BackToCatalog(project_kind));
+                cx.emit(CatalogEvent::BackToCatalog);
             }))
             .child(
                 div()

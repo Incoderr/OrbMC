@@ -1,5 +1,9 @@
 //! Skins page: the saved-skin gallery, the rotatable preview and the local
 //! skin switch. Owns its view state; the app only embeds the entity.
+//!
+//! What the game shows depends on the account: offline mode sends no skin at
+//! all, an Ely.by account wears the skin set on ely.by. The page says which,
+//! so the library is not mistaken for the in-game skin.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -10,7 +14,9 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use gpui_kit::{MouseDownEvent, MouseMoveEvent, RenderImage};
 
+use super::ely::{self, ElySkin};
 use super::{SkinId, SkinModel, SkinState};
+use crate::features::auth::AuthState;
 use crate::features::settings::SettingsState;
 use crate::shared::locale::Locale;
 use crate::shared::theme::Palette;
@@ -25,11 +31,51 @@ pub struct SkinsView {
     message: Option<String>,
     palette: Palette,
     locale: Locale,
-    _settings_observer: Subscription,
+    auth: Entity<AuthState>,
+    ely: ElySkinState,
+    _subscriptions: [Subscription; 2],
+}
+
+/// The Ely.by skin of the playing account.
+enum ElySkinState {
+    /// Offline mode: no skin reaches the game.
+    Offline,
+    Loading {
+        name: String,
+    },
+    Loaded {
+        name: String,
+        skin: Option<ElySkin>,
+    },
+    Failed {
+        name: String,
+    },
+}
+
+impl ElySkinState {
+    fn name(&self) -> Option<&str> {
+        match self {
+            Self::Offline => None,
+            Self::Loading { name } | Self::Loaded { name, .. } | Self::Failed { name } => {
+                Some(name)
+            }
+        }
+    }
+
+    fn skin(&self) -> Option<&ElySkin> {
+        match self {
+            Self::Loaded { skin, .. } => skin.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 impl SkinsView {
-    pub fn new(settings: &Entity<SettingsState>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        settings: &Entity<SettingsState>,
+        auth: Entity<AuthState>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (palette, locale) = {
             let settings = settings.read(cx);
             (settings.palette(), settings.locale())
@@ -40,7 +86,8 @@ impl SkinsView {
             this.locale = settings.locale();
             cx.notify();
         });
-        Self {
+        let auth_observer = cx.observe(&auth, |this, _, cx| this.follow_account(false, cx));
+        let mut view = Self {
             skins: SkinState::load(),
             yaw: -0.24,
             dragging: false,
@@ -50,13 +97,97 @@ impl SkinsView {
             message: None,
             palette,
             locale,
-            _settings_observer: settings_observer,
+            auth,
+            ely: ElySkinState::Offline,
+            _subscriptions: [settings_observer, auth_observer],
+        };
+        view.follow_account(false, cx);
+        view
+    }
+
+    /// Face for the account button: the Ely.by skin for an Ely.by account,
+    /// the selected library skin in offline mode.
+    pub fn head(&self) -> Option<Arc<RenderImage>> {
+        match &self.ely {
+            ElySkinState::Offline => self.skins.head(),
+            ely => ely.skin().map(|skin| skin.head.clone()),
         }
     }
 
-    /// Face of the selected skin, shown on the account button.
-    pub fn head(&self) -> Option<Arc<RenderImage>> {
-        self.skins.head()
+    /// Loads the Ely.by skin when the playing account changes, or again when
+    /// `reload` is set.
+    fn follow_account(&mut self, reload: bool, cx: &mut Context<Self>) {
+        let name = self
+            .auth
+            .read(cx)
+            .selected()
+            .map(|account| account.name.clone());
+        if !reload && name.as_deref() == self.ely.name() {
+            return;
+        }
+        self.drop_ely_images(cx);
+        let Some(name) = name else {
+            self.ely = ElySkinState::Offline;
+            cx.notify();
+            return;
+        };
+        self.ely = ElySkinState::Loading { name: name.clone() };
+        cx.notify();
+        let task = cx.background_executor().spawn({
+            let name = name.clone();
+            async move { ely::fetch(&name) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                // The account may have changed while the skin was loading.
+                if !matches!(&this.ely, ElySkinState::Loading { name: loading } if *loading == name)
+                {
+                    return;
+                }
+                this.ely = match result {
+                    Ok(skin) => ElySkinState::Loaded { name, skin },
+                    Err(message) => {
+                        tracing::warn!(%message, "failed to load the Ely.by skin");
+                        ElySkinState::Failed { name }
+                    }
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn drop_ely_images(&mut self, cx: &mut Context<Self>) {
+        if let Some(skin) = self.ely.skin() {
+            cx.drop_image(skin.preview.clone(), None);
+            cx.drop_image(skin.head.clone(), None);
+        }
+    }
+
+    /// Ely.by takes skins only through its site: prepare the file, show it in
+    /// the file browser and open the upload page.
+    fn send_to_ely(&mut self, id: SkinId, name: String, cx: &mut Context<Self>) {
+        let task = cx
+            .background_executor()
+            .spawn(async move { ely::export_for_upload(id, &name) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(path) => {
+                        if let Err(error) = crate::platform::process::reveal_file(&path) {
+                            tracing::warn!(%error, "failed to show the skin file");
+                        }
+                        cx.open_url(ely::UPLOAD_PAGE);
+                        this.message = None;
+                    }
+                    Err(message) => this.message = Some(message),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn import_skin(&mut self, cx: &mut Context<Self>) {
@@ -506,8 +637,27 @@ fn skin_page(this: &mut SkinsView, cx: &mut Context<SkinsView>) -> AnyElement {
         );
     }
 
+    let send_button = selected_skin
+        .as_ref()
+        .filter(|_| !matches!(this.ely, ElySkinState::Offline))
+        .map(|skin| {
+            let (id, name) = (skin.id, skin.name.clone());
+            UiButton::new("send-skin-to-ely")
+                .cursor_pointer()
+                .w_full()
+                .px_3()
+                .py_2()
+                .rounded(px(8.))
+                .bg(rgb(palette.accent))
+                .text_color(rgb(palette.accent_foreground))
+                .hover(|style| style.opacity(0.9))
+                .on_click(cx.listener(move |this, _, _, cx| this.send_to_ely(id, name.clone(), cx)))
+                .child(locale.text("Загрузить на Ely.by", "Upload to Ely.by"))
+        });
+    let status = account_status(this, palette, locale, cx);
+
     let count = format!("{} / {}", this.skins.skins().len(), this.skins.max_skins());
-    div()
+    let columns = div()
         .h_flex()
         .items_stretch()
         .w_full()
@@ -527,7 +677,7 @@ fn skin_page(this: &mut SkinsView, cx: &mut Context<SkinsView>) -> AnyElement {
                     div()
                         .text_size(px(15.))
                         .font_weight(FontWeight::BOLD)
-                        .child(locale.text("Выбранный скин", "Selected skin")),
+                        .child(locale.text("Скин из библиотеки", "Library skin")),
                 )
                 .child(preview_window)
                 .child(
@@ -538,6 +688,7 @@ fn skin_page(this: &mut SkinsView, cx: &mut Context<SkinsView>) -> AnyElement {
                         .child(locale.text("Зажми и веди мышью, чтобы вращать", "Drag to rotate")),
                 )
                 .when_some(model_controls, |column, controls| column.child(controls))
+                .when_some(send_button, |column, button| column.child(button))
                 .when_some(delete_button, |column, button| column.child(button)),
         )
         .child(
@@ -581,8 +732,180 @@ fn skin_page(this: &mut SkinsView, cx: &mut Context<SkinsView>) -> AnyElement {
                             )
                         }),
                 ),
-        )
+        );
+
+    div()
+        .v_flex()
+        .w_full()
+        .flex_1()
+        .min_h_0()
+        .gap_4()
+        .child(status)
+        .child(columns)
         .into_any_element()
+}
+
+/// What the game shows for the current account, and how to change it.
+fn account_status(
+    this: &SkinsView,
+    palette: Palette,
+    locale: Locale,
+    cx: &mut Context<SkinsView>,
+) -> AnyElement {
+    let card = div()
+        .h_flex()
+        .w_full()
+        .flex_shrink_0()
+        .items_center()
+        .gap_4()
+        .p_3()
+        .rounded(px(10.))
+        .bg(rgb(palette.surface))
+        .border_1()
+        .border_color(rgb(palette.border));
+    let text = |title: String, detail: &'static str| {
+        div()
+            .v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_1()
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::BOLD)
+                    .child(title),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette.muted))
+                    .child(detail),
+            )
+    };
+
+    let name = match this.ely.name() {
+        Some(name) => name.to_owned(),
+        None => {
+            return card
+                .child(
+                    div()
+                        .text_size(px(20.))
+                        .text_color(rgb(palette.muted))
+                        .child(IconName::Info),
+                )
+                .child(text(
+                    locale
+                        .text(
+                            "Офлайн-режим: скин в игру не передаётся",
+                            "Offline mode: no skin reaches the game",
+                        )
+                        .to_owned(),
+                    locale.text(
+                        "В игре будет стандартный скин. Библиотека ниже хранит скины только в лаунчере. Войди через Ely.by в меню аккаунта, чтобы твой скин видели в игре.",
+                        "The game shows a default skin. The library below keeps skins in the launcher only. Sign in with Ely.by from the account menu to wear your skin in game.",
+                    ),
+                ))
+                .into_any_element();
+        }
+    };
+
+    let (title, detail) = match &this.ely {
+        ElySkinState::Loading { .. } => (
+            locale.text("Загружаем скин с Ely.by…", "Loading the Ely.by skin…"),
+            locale.text(
+                "Это скин, который видят в игре.",
+                "This is the skin shown in game.",
+            ),
+        ),
+        ElySkinState::Loaded { skin: None, .. } => (
+            locale.text("На Ely.by скин не задан", "No skin set on Ely.by"),
+            locale.text(
+                "В игре будет стандартный скин. Загрузи свой на сайте Ely.by.",
+                "The game shows a default skin. Upload yours on the Ely.by site.",
+            ),
+        ),
+        ElySkinState::Failed { .. } => (
+            locale.text("Не удалось загрузить скин с Ely.by", "Could not load the Ely.by skin"),
+            locale.text(
+                "Проверь подключение и нажми «Обновить».",
+                "Check the connection and press Refresh.",
+            ),
+        ),
+        _ => (
+            locale.text("Скин в игре", "In-game skin"),
+            locale.text(
+                "Скин меняется только на сайте Ely.by: из лаунчера его поменять нельзя. Скин из библиотеки можно загрузить туда кнопкой «Загрузить на Ely.by».",
+                "Ely.by lets you change the skin only on its site. Send a library skin there with Upload to Ely.by.",
+            ),
+        ),
+    };
+    let model = this.ely.skin().map(|skin| match skin.model {
+        SkinModel::Classic => locale.text("широкие руки", "classic arms"),
+        SkinModel::Slim => locale.text("узкие руки", "slim arms"),
+    });
+    let preview = this.ely.skin().map(|skin| skin.preview.clone());
+    let action = |id: &'static str, label: &'static str, primary: bool| {
+        UiButton::new(id)
+            .cursor_pointer()
+            .flex_shrink_0()
+            .px_3()
+            .py_2()
+            .rounded(px(8.))
+            .bg(rgb(if primary {
+                palette.accent
+            } else {
+                palette.control
+            }))
+            .text_color(rgb(if primary {
+                palette.accent_foreground
+            } else {
+                palette.foreground
+            }))
+            .hover(|style| style.opacity(0.9))
+            .child(label)
+    };
+
+    card.child(
+        div()
+            .w(px(56.))
+            .h(px(96.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(8.))
+            .bg(rgb(palette.control))
+            .text_color(rgb(palette.muted))
+            .map(|frame| match preview {
+                Some(image) => frame.child(img(image).size_full().object_fit(ObjectFit::Contain)),
+                None => frame.child(IconName::User),
+            }),
+    )
+    .child(text(
+        match model {
+            Some(model) => format!("{title} · {name} · Ely.by · {model}"),
+            None => format!("{title} · {name}"),
+        },
+        detail,
+    ))
+    .child(
+        action(
+            "refresh-ely-skin",
+            locale.text("Обновить", "Refresh"),
+            false,
+        )
+        .disabled(matches!(this.ely, ElySkinState::Loading { .. }))
+        .on_click(cx.listener(|this, _, _, cx| this.follow_account(true, cx))),
+    )
+    .child(
+        action(
+            "open-ely-skins",
+            locale.text("Изменить скин на Ely.by", "Change skin on Ely.by"),
+            true,
+        )
+        .on_click(|_, _, cx| cx.open_url(ely::UPLOAD_PAGE)),
+    )
+    .into_any_element()
 }
 
 fn saved_skin_header(count: String, palette: Palette, locale: Locale) -> Div {

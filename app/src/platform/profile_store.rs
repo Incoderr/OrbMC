@@ -21,7 +21,19 @@ pub fn save<T: Serialize>(profiles: &[T]) -> std::io::Result<()> {
 }
 
 pub fn load_settings<T: DeserializeOwned + Default>() -> std::io::Result<T> {
-    let path = settings_path()?;
+    load_json_or_default(&settings_path()?)
+}
+
+/// Signed-in accounts without their tokens (those live in `credentials`).
+pub fn load_accounts<T: DeserializeOwned + Default>() -> std::io::Result<T> {
+    load_json_or_default(&data_directory()?.join("accounts.json"))
+}
+
+pub fn save_accounts<T: Serialize>(accounts: &T) -> std::io::Result<()> {
+    write_json_atomically(&data_directory()?.join("accounts.json"), accounts)
+}
+
+fn load_json_or_default<T: DeserializeOwned + Default>(path: &Path) -> std::io::Result<T> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

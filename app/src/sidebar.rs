@@ -16,7 +16,7 @@ impl LauncherApp {
         cx: &Context<Self>,
     ) -> AnyElement {
         let is_selected = self.active_page == page
-            || (page == Page::Mods && self.active_page == Page::ModDetails);
+            || (page == Page::Catalog && self.active_page == Page::ModDetails);
         let is_collapsed = self.settings.read(cx).sidebar_collapsed();
         let title = page.title(locale);
         let content = if is_collapsed {
