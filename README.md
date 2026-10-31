@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/Incoderr/OrbMC?label=релиз)](https://github.com/Incoderr/OrbMC/releases/latest)
 [![License: GPL-3.0](https://img.shields.io/badge/лицензия-GPL--3.0-blue.svg)](LICENSE)
 ![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Windows](https://img.shields.io/badge/платформа-Windows-0078D6.svg)
+![Windows | Linux](https://img.shields.io/badge/платформа-Windows%20%7C%20Linux-0078D6.svg)
 
 OrbMC — быстрый и нативный лаунчер Minecraft написанный на Rust. Интерфейс построен на
 [GPUI](https://www.gpui.rs/), без Electron, WebView и Node.js. Java требуется только самой игре;
