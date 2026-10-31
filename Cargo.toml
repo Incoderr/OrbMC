@@ -9,7 +9,7 @@ gpui-pre = { path = "vendor/gpui-pre" }
 mc-launcher-core = { path = "vendor/mc-launcher-core" }
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 
 [workspace.dependencies]
