@@ -44,7 +44,8 @@ assets/icons/remix/          Remix Icon SVGs (Apache-2.0), see `shell/icons.rs`
 installer/orbmc.iss          Windows installer (Inno Setup)
 packaging/linux/             Linux .desktop file and packaging scripts
 site/                        project website (static HTML; download links come
-                             from the latest GitHub release at run time)
+                             from the latest GitHub release at run time),
+                             published to GitHub Pages by workflows/pages.yml
 ```
 
 `platform` is a module inside `app`, not a separate crate. Do not create
