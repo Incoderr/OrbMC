@@ -77,6 +77,7 @@ impl Release {
     pub fn installable(&self) -> bool {
         update_public_key().is_some()
             && !cfg!(debug_assertions)
+            && self_update::installed()
             && self.installer.is_some()
             && self.signature.is_some()
     }
@@ -180,14 +181,15 @@ impl Updater {
         cx.notify();
     }
 
+    /// The launcher always looks for new versions, so the sidebar can offer
+    /// them; automatic updates only decide whether one is downloaded at once.
     fn check_automatically(&mut self, cx: &mut Context<Self>) {
-        if self.settings.read(cx).auto_update()
-            && matches!(
-                self.status,
-                UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Failed(_)
-            )
-        {
-            self.check(true, cx);
+        if matches!(
+            self.status,
+            UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Failed(_)
+        ) {
+            let install = self.settings.read(cx).auto_update();
+            self.check(install, cx);
         }
     }
 
@@ -374,12 +376,14 @@ fn newer_release(release: GitHubRelease, current: Version) -> Option<Release> {
                 size: asset.size,
             })
     };
-    let installer_name = self_update::RELEASE_ASSET;
+    let installer_name = self_update::release_asset(&version.to_string());
     Some(Release {
         version,
         page_url: release.html_url.clone(),
-        installer: installer_name.and_then(asset),
-        signature: installer_name.and_then(|name| asset(&format!("{name}.minisig"))),
+        installer: installer_name.as_deref().and_then(asset),
+        signature: installer_name
+            .as_deref()
+            .and_then(|name| asset(&format!("{name}.minisig"))),
     })
 }
 
@@ -509,14 +513,18 @@ mod tests {
             html_url: "https://github.com/Incoderr/OrbMC/releases/tag/v1".into(),
             draft: false,
             prerelease: false,
-            assets: ["OrbMC-Setup.exe", "OrbMC-Setup.exe.minisig"]
-                .into_iter()
-                .map(|name| GitHubAsset {
-                    name: name.into(),
-                    browser_download_url: format!("https://example.com/{name}"),
-                    size: 10,
-                })
-                .collect(),
+            assets: [
+                "orbmc-0.3.0-windows-x64-setup.exe",
+                "orbmc-0.3.0-windows-x64-setup.exe.minisig",
+                "orbmc-0.3.0-windows-x64-portable.zip",
+            ]
+            .into_iter()
+            .map(|name| GitHubAsset {
+                name: name.into(),
+                browser_download_url: format!("https://example.com/{name}"),
+                size: 10,
+            })
+            .collect(),
         }
     }
 
@@ -531,10 +539,14 @@ mod tests {
 
         let release = newer_release(github_release("v0.3.0"), current).unwrap();
         assert_eq!(release.version, Version(0, 3, 0));
-        if self_update::RELEASE_ASSET.is_some() {
+        if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+            assert_eq!(
+                release.installer.map(|asset| asset.url),
+                Some("https://example.com/orbmc-0.3.0-windows-x64-setup.exe".to_owned())
+            );
             assert_eq!(
                 release.signature.map(|asset| asset.url),
-                Some("https://example.com/OrbMC-Setup.exe.minisig".to_owned())
+                Some("https://example.com/orbmc-0.3.0-windows-x64-setup.exe.minisig".to_owned())
             );
         }
     }

@@ -40,6 +40,8 @@ vendor/
                              install/launch engine (see §3)
   gpui-pre/                  patched copy of gpui-pre 0.3.7 (inspector fixes)
 assets/logo/                 application icon (embedded by app/build.rs)
+installer/orbmc.iss          Windows installer (Inno Setup)
+packaging/linux/             Linux .desktop file and packaging scripts
 ```
 
 `platform` is a module inside `app`, not a separate crate. Do not create
@@ -226,16 +228,32 @@ catalog searches Modrinth only and says so under the source filter.
   `%LOCALAPPDATA%\Programs\OrbMC` without admin rights, with a Start menu
   entry and an uninstaller; launcher data is never touched. Never change its
   `AppId`.
+- Linux packages: `packaging/linux/package.sh` makes `.deb`, `.rpm` (metadata
+  in `app/Cargo.toml`: `package.metadata.deb` / `generate-rpm`), AppImage and
+  `.tar.gz` from `target/release/orbmc`; `.github/workflows/build-linux.yml`
+  builds them on ubuntu-22.04 (by hand, or called by the release). The window
+  `app_id` `orbmc` matches `orbmc.desktop`. Linux builds do not update
+  themselves: the launcher shows a new version and opens the release page.
 - Self-update: `features::updates` reads the latest GitHub release, downloads
-  `OrbMC-Setup.exe` to the temp folder and verifies `OrbMC-Setup.exe.minisig`.
-  On restart (or on quit) `platform::self_update` runs it with `/VERYSILENT`;
-  the installer waits for the launcher's single-instance mutex to go away,
-  replaces the files and starts the new version (not after a quit:
-  `/NOLAUNCH`). Debug builds never install.
+  `orbmc-<version>-windows-x64-setup.exe` to the temp folder and verifies its
+  `.minisig`. On restart (or on quit) `platform::self_update` runs it with
+  `/VERYSILENT`; the installer waits for the launcher's single-instance mutex
+  to go away, replaces the files and starts the new version (not after a
+  quit: `/NOLAUNCH`). Debug builds and portable copies (no `unins000.exe`
+  next to the executable) never install; they open the release page. New
+  versions are always looked for (5 s after start, then every 6 h); the
+  "automatic updates" setting only decides whether one is downloaded at once.
+  The sidebar indicator installs, restarts or opens the release page itself.
   Releases come from `.github/workflows/release.yml` on a `vX.Y.Z` tag that
-  must match the workspace version; it builds the installer, signs it and
-  `orbmc.exe` (kept for launchers before 0.3, which replace their own
-  executable) with `rsign` using the `ORBMC_UPDATE_SECRET_KEY` secret.
+  must match the workspace version. Files are named
+  `orbmc-<version>-<os>-<arch>[-<kind>]` (`windows-x64-setup.exe`,
+  `windows-x64-portable.zip`, `linux-x86_64.deb`, …); Windows launchers find
+  their update by the installer's name, so keep the pattern.
+  Only the installer is signed (`rsign`, `ORBMC_UPDATE_SECRET_KEY` secret).
+  Launchers up to 0.2.3 looked for `orbmc.exe` / `OrbMC-Setup.exe` and update
+  to 0.2.4 by hand.
+- Build-time keys (Discord, update key) exist only in CI builds: a local
+  `cargo build --release` lacks them unless the variables are set.
 - The launcher logs to `<data>/logs/launcher.log` (`platform::logging`); the
   previous run is `launcher.old.log`. Game output of the latest launch is kept
   per build (`instances::game_log`) and shown in the build page's "Log" tab.

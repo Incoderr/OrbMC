@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=OrbMC
+GenericName=Minecraft Launcher
+Comment=Minecraft launcher
+Comment[ru]=Лаунчер Minecraft
+Exec=orbmc
+Icon=orbmc
+Terminal=false
+Categories=Game;
+Keywords=minecraft;launcher;mods;
+StartupWMClass=orbmc

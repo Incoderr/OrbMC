@@ -1,7 +1,8 @@
 ; OrbMC installer (Inno Setup 6). Per-user install, no administrator rights.
 ;
 ; Build: iscc /DAppVersion=0.2.2 /DSourceExe=..\target\release\orbmc.exe installer\orbmc.iss
-; The release workflow builds it as dist\OrbMC-Setup.exe.
+; The release workflow builds it as dist\orbmc-<version>-windows-x64-setup.exe:
+; the launcher finds its update by that name (platform::self_update).
 ;
 ; The launcher updates itself by running this same installer with
 ; /VERYSILENT /SUPPRESSMSGBOXES /NORESTART: it waits for the running
@@ -13,6 +14,9 @@
 #endif
 #ifndef SourceExe
   #define SourceExe "..\target\release\orbmc.exe"
+#endif
+#ifndef OutputName
+  #define OutputName "orbmc-setup"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\dist"
@@ -41,7 +45,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDir}
-OutputBaseFilename=OrbMC-Setup
+OutputBaseFilename={#OutputName}
 Compression=lzma2/max
 SolidCompression=yes
 ; The launcher is closed by the update itself (see InitializeSetup); Restart

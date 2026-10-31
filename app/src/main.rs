@@ -82,6 +82,8 @@ fn main() -> Result<(), reqwest::Error> {
 
             let window_options = WindowOptions {
                 window_min_size: Some(size(px(900.), px(620.))),
+                // Linux docks match the window to `orbmc.desktop` by it.
+                app_id: Some("orbmc".into()),
                 titlebar: Some(TitlebarOptions {
                     title: Some("OrbMC".into()),
                     ..Default::default()

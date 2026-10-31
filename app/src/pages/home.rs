@@ -166,9 +166,11 @@ impl LauncherApp {
 }
 
 impl LauncherApp {
-    /// A newer launcher in the sidebar: available, downloading, or installed
-    /// and waiting for a restart. A click restarts into an installed update
-    /// when nothing is running, otherwise opens the settings with the details.
+    /// A newer launcher in the sidebar. A click does the next step itself:
+    /// downloads an available update, restarts into a downloaded one, or opens
+    /// the release page when this build cannot install updates. While a
+    /// download runs, or a game keeps the launcher from restarting, it opens
+    /// the settings with the details.
     pub(crate) fn update_indicator(
         &self,
         collapsed: bool,
@@ -178,14 +180,30 @@ impl LauncherApp {
     ) -> Option<AnyElement> {
         use crate::features::updates::UpdateStatus;
 
+        enum Click {
+            Install,
+            OpenPage(String),
+            Restart,
+            Settings,
+        }
+
         let updater = self.updater.read(cx);
-        let restart =
-            matches!(updater.status(), UpdateStatus::Ready { .. }) && updater.can_restart(cx);
-        let label = match updater.status() {
-            UpdateStatus::Available(release) => format!(
-                "{} {}",
-                locale.text("Доступна версия", "Version available:"),
-                release.version
+        let (label, click) = match updater.status() {
+            UpdateStatus::Available(release) if release.installable() => (
+                format!(
+                    "{} {}",
+                    locale.text("Обновить до", "Update to"),
+                    release.version
+                ),
+                Click::Install,
+            ),
+            UpdateStatus::Available(release) => (
+                format!(
+                    "{} {}",
+                    locale.text("Скачать версию", "Download version"),
+                    release.version
+                ),
+                Click::OpenPage(release.page_url.clone()),
             ),
             UpdateStatus::Downloading { version, transfer } => {
                 let progress = transfer.progress();
@@ -194,19 +212,28 @@ impl LauncherApp {
                     .filter(|total| *total > 0)
                     .map(|total| progress.received * 100 / total)
                     .unwrap_or(0);
-                format!(
-                    "{} {version} · {percent}%",
-                    locale.text("Обновление", "Updating to")
+                (
+                    format!(
+                        "{} {version} · {percent}%",
+                        locale.text("Обновление", "Updating to")
+                    ),
+                    Click::Settings,
                 )
             }
-            UpdateStatus::Ready { version, .. } if restart => format!(
-                "{} {version}",
-                locale.text("Перезапустить в", "Restart into")
+            UpdateStatus::Ready { version, .. } if updater.can_restart(cx) => (
+                format!(
+                    "{} {version}",
+                    locale.text("Перезапустить в", "Restart into")
+                ),
+                Click::Restart,
             ),
-            UpdateStatus::Ready { version, .. } => format!(
-                "{} {version} {}",
-                locale.text("Версия", "Version"),
-                locale.text("ждёт перезапуска", "waits for a restart")
+            UpdateStatus::Ready { version, .. } => (
+                format!(
+                    "{} {version} {}",
+                    locale.text("Версия", "Version"),
+                    locale.text("установится при выходе", "installs when you quit")
+                ),
+                Click::Settings,
             ),
             _ => return None,
         };
@@ -226,12 +253,11 @@ impl LauncherApp {
                 let label = label.clone();
                 move |window, cx| Tooltip::new(label.clone()).build(window, cx)
             })
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if restart {
-                    this.updater.update(cx, |updater, cx| updater.restart(cx));
-                } else {
-                    this.navigate_to(Page::Settings, window, cx);
-                }
+            .on_click(cx.listener(move |this, _, window, cx| match &click {
+                Click::Install => this.updater.update(cx, |updater, cx| updater.install(cx)),
+                Click::OpenPage(url) => cx.open_url(url),
+                Click::Restart => this.updater.update(cx, |updater, cx| updater.restart(cx)),
+                Click::Settings => this.navigate_to(Page::Settings, window, cx),
             }));
         let icon = div()
             .text_color(rgb(palette.accent))

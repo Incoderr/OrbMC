@@ -1,10 +1,12 @@
 name: Release
 
-# Pushing a tag `vX.Y.Z` builds the launcher and its installer, signs them for
-# in-app updates and publishes a GitHub release. Launchers from 0.3 on update
-# through OrbMC-Setup.exe; orbmc.exe stays in releases for older launchers,
-# which replace their executable with it. The tag must match the workspace version in
-# Cargo.toml: the launcher compares that version with the latest release.
+# Pushing a tag `vX.Y.Z` builds the launcher for Windows (installer, portable
+# zip) and Linux (.deb, .rpm, AppImage, .tar.gz), signs the Windows installer
+# for in-app updates and publishes a GitHub release. Files are named
+# `orbmc-<version>-<os>-<arch>[-<kind>]`; Windows launchers find their update
+# by the installer's name (platform::self_update), so keep the pattern.
+# The tag must match the workspace version in Cargo.toml: the launcher
+# compares that version with the latest release.
 on:
   push:
     tags:
@@ -14,20 +16,26 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
+  check:
+    runs-on: ubuntu-latest
     steps:
       - name: Check out tag
         uses: actions/checkout@v4
 
       - name: Check tag matches Cargo version
-        shell: pwsh
         run: |
-          $match = Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1
-          $version = $match.Matches[0].Groups[1].Value
-          if ("v$version" -ne $env:GITHUB_REF_NAME) {
-            throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
-          }
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+
+  windows:
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@v4
 
       - name: Check signing setup
         shell: pwsh
@@ -55,7 +63,7 @@ jobs:
         run: cargo build --release --package orbmc --no-default-features --target x86_64-pc-windows-msvc
 
       # windows-latest may come without Inno Setup.
-      - name: Build installer
+      - name: Package installer and portable zip
         shell: pwsh
         run: |
           $iscc = Get-Command iscc -ErrorAction SilentlyContinue
@@ -66,37 +74,83 @@ jobs:
             $iscc = $iscc.Source
           }
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          & $iscc /Q "/DAppVersion=$version" "/DSourceExe=$PWD\target\x86_64-pc-windows-msvc\release\orbmc.exe" "/DOutputDir=$PWD\dist" installer\orbmc.iss
+          $base = "orbmc-$version-windows-x64"
+          $exe = "$PWD\target\x86_64-pc-windows-msvc\release\orbmc.exe"
+          & $iscc /Q "/DAppVersion=$version" "/DSourceExe=$exe" "/DOutputDir=$PWD\dist" "/DOutputName=$base-setup" installer\orbmc.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          Compress-Archive -Path $exe -DestinationPath "dist\$base-portable.zip"
+          "BASE=$base" >> $env:GITHUB_ENV
 
       - name: Install rsign
         run: cargo install rsign2 --locked
 
       # The secret key is created without a password (`rsign generate -W`);
       # it only ever exists as a GitHub secret and in this job's temp folder.
-      - name: Sign installer and executable
+      - name: Sign installer
         shell: pwsh
         env:
           SECRET_KEY: ${{ secrets.ORBMC_UPDATE_SECRET_KEY }}
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/x86_64-pc-windows-msvc/release/orbmc.exe dist/orbmc.exe
           $key = Join-Path $env:RUNNER_TEMP "orbmc-update.key"
           # rsign needs the comment line too; the secret may hold the whole
           # key file or only its key line, so the file is rebuilt either way.
           $encoded = ($env:SECRET_KEY -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1).Trim()
           Set-Content -Path $key -Value "untrusted comment: rsign encrypted secret key`n$encoded`n" -NoNewline
           try {
-            foreach ($file in "dist/OrbMC-Setup.exe", "dist/orbmc.exe") {
-              rsign sign -W -s $key -x "$file.minisig" -t "OrbMC $env:GITHUB_REF_NAME" $file
-              if ($LASTEXITCODE -ne 0) { throw "rsign failed for $file" }
-            }
+            $file = "dist/$env:BASE-setup.exe"
+            rsign sign -W -s $key -x "$file.minisig" -t "OrbMC $env:GITHUB_REF_NAME" $file
+            if ($LASTEXITCODE -ne 0) { throw "rsign failed for $file" }
           } finally {
             Remove-Item $key -Force
           }
 
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbmc-windows
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    needs: check
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      ref: ${{ github.ref_name }}
+    secrets: inherit
+
+  publish:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publish release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME dist/OrbMC-Setup.exe dist/OrbMC-Setup.exe.minisig dist/orbmc.exe dist/orbmc.exe.minisig --title "OrbMC $env:GITHUB_REF_NAME" --generate-notes
+          GH_REPO: ${{ github.repository }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          win="orbmc-$v-windows-x64"
+          lin="orbmc-$v-linux-x86_64"
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          ## Скачать / Download
+
+          | Система / OS | Файл / File |
+          |---|---|
+          | Windows 10/11 x64 — установщик / installer | \`$win-setup.exe\` |
+          | Windows 10/11 x64 — portable | \`$win-portable.zip\` |
+          | Linux x86_64 — Debian, Ubuntu, Mint | \`$lin.deb\` |
+          | Linux x86_64 — Fedora, openSUSE | \`$lin.rpm\` |
+          | Linux x86_64 — любой дистрибутив / any distribution | \`$lin.AppImage\` |
+          | Linux x86_64 — архив / archive | \`$lin.tar.gz\` |
+
+          Установщик Windows ставит лаунчер без прав администратора и дальше обновляет его сам. Остальные сборки лаунчер находит и показывает, но обновлять их нужно вручную. \`.minisig\` — подпись для автообновления, скачивать её не нужно.
+
+          The Windows installer needs no admin rights and keeps the launcher updated. Other builds show new versions but are updated by hand. \`.minisig\` is the signature for in-app updates; no need to download it.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "OrbMC $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes

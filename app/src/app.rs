@@ -7,7 +7,6 @@ use crate::{
 };
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::{Theme, ThemeMode};
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 #[path = "dialogs/mod.rs"]
@@ -16,6 +15,10 @@ mod dialogs;
 mod pages;
 #[path = "sidebar.rs"]
 mod sidebar;
+
+const SIDEBAR_WIDTH: f32 = 252.;
+const SIDEBAR_COLLAPSED_WIDTH: f32 = 76.;
+const SIDEBAR_ANIMATION: std::time::Duration = std::time::Duration::from_millis(220);
 
 pub struct LauncherApp {
     active_page: Page,
@@ -35,6 +38,9 @@ pub struct LauncherApp {
     settings_view: Entity<crate::features::settings::SettingsView>,
     updater: Entity<crate::features::updates::Updater>,
     _updater_observer: Subscription,
+    /// Counts sidebar toggles in this run: a new value gives the sidebar a new
+    /// element id, which replays its width animation (none on startup).
+    sidebar_toggles: u32,
 }
 impl LauncherApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -200,6 +206,7 @@ impl LauncherApp {
             account,
             updater,
             _updater_observer: updater_observer,
+            sidebar_toggles: 0,
         }
     }
 
@@ -279,51 +286,6 @@ impl Render for LauncherApp {
             Page::Settings => self.settings_view.clone().into_any_element(),
             Page::Skins => self.skins.clone().into_any_element(),
         };
-        let page_subtitle = match active_page {
-            Page::Home => "",
-            Page::Instances => locale.text(
-                "Версия игры, загрузчик и установленные моды",
-                "Game version, loader, and installed mods",
-            ),
-            Page::Catalog => locale.text(
-                "Моды, модпаки, текстурпаки и шейдеры",
-                "Mods, modpacks, texture packs, and shaders",
-            ),
-            Page::Settings => locale.text(
-                "Язык и оформление лаунчера",
-                "Launcher language and appearance",
-            ),
-            Page::Skins => locale.text(
-                "Загружай и выбирай скины персонажа",
-                "Upload and choose your character skins",
-            ),
-            Page::ModDetails => "",
-            Page::InstanceDetails(_) => "",
-        };
-        let page_header = if matches!(active_page, Page::ModDetails | Page::InstanceDetails(_)) {
-            div().into_any_element()
-        } else {
-            div()
-                .v_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .text_size(px(26.))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(palette.foreground))
-                        .child(active_page.title(locale)),
-                )
-                .when(!page_subtitle.is_empty(), |header| {
-                    header.child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(rgb(palette.muted))
-                            .child(page_subtitle),
-                    )
-                })
-                .into_any_element()
-        };
-
         let downloads =
             crate::features::downloads::DownloadSummary::from_instances(self.instances.read(cx))
                 .map(|summary| {
@@ -336,34 +298,52 @@ impl Render for LauncherApp {
             self.update_indicator(collapsed, palette, locale, cx)
         };
 
+        let sidebar_collapsed = self.settings.read(cx).sidebar_collapsed();
+        let (from_width, to_width) = if sidebar_collapsed {
+            (SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH)
+        } else {
+            (SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH)
+        };
+        let sidebar = div()
+            .id(("sidebar", self.sidebar_toggles))
+            .v_flex()
+            .flex_none()
+            .w(px(to_width))
+            .overflow_hidden()
+            .h_full()
+            .px_3()
+            .py_5()
+            .gap_6()
+            .bg(rgb(palette.sidebar))
+            .border_r_1()
+            .border_color(rgb(palette.border))
+            .child(sidebar_header)
+            .child(navigation)
+            .child(div().flex_1())
+            .children(update)
+            .children(downloads)
+            .child(div().h(px(1.)).w_full().bg(rgb(palette.border)))
+            .child(self.account.clone())
+            .child(settings_button);
+        let sidebar = if self.sidebar_toggles == 0 {
+            sidebar.into_any_element()
+        } else {
+            sidebar
+                .with_animation(
+                    ("sidebar-width", self.sidebar_toggles),
+                    Animation::new(SIDEBAR_ANIMATION).with_easing(ease_out_quint()),
+                    move |sidebar, delta| {
+                        sidebar.w(px(from_width + (to_width - from_width) * delta))
+                    },
+                )
+                .into_any_element()
+        };
+
         div()
             .flex()
             .size_full()
             .bg(rgb(palette.background))
-            .child(
-                div()
-                    .v_flex()
-                    .w(if self.settings.read(cx).sidebar_collapsed() {
-                        px(76.)
-                    } else {
-                        px(252.)
-                    })
-                    .h_full()
-                    .px_3()
-                    .py_5()
-                    .gap_6()
-                    .bg(rgb(palette.sidebar))
-                    .border_r_1()
-                    .border_color(rgb(palette.border))
-                    .child(sidebar_header)
-                    .child(navigation)
-                    .child(div().flex_1())
-                    .children(update)
-                    .children(downloads)
-                    .child(div().h(px(1.)).w_full().bg(rgb(palette.border)))
-                    .child(self.account.clone())
-                    .child(settings_button),
-            )
+            .child(sidebar)
             .child(
                 div()
                     .v_flex()
@@ -374,7 +354,6 @@ impl Render for LauncherApp {
                     .pt_4()
                     .pb_8()
                     .gap_4()
-                    .child(page_header)
                     .child(page_body),
             )
     }

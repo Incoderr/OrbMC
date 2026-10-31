@@ -2,6 +2,34 @@
 name = "orbmc"
 version.workspace = true
 edition.workspace = true
+description = "Minecraft launcher"
+license = "GPL-3.0-only"
+homepage = "https://github.com/Incoderr/OrbMC"
+
+# Linux packages, built by packaging/linux/package.sh.
+[package.metadata.deb]
+maintainer = "Incoderr <https://github.com/Incoderr/OrbMC/issues>"
+copyright = "OrbMC contributors"
+license-file = ["../LICENSE", "0"]
+section = "games"
+priority = "optional"
+# GPUI loads Vulkan at run time, so it is not found by `$auto`.
+depends = "$auto, libvulkan1"
+assets = [
+    ["target/release/orbmc", "usr/bin/", "755"],
+    ["../packaging/linux/orbmc.desktop", "usr/share/applications/", "644"],
+    ["../assets/logo/orbmc.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/orbmc", dest = "/usr/bin/orbmc", mode = "755" },
+    { source = "../packaging/linux/orbmc.desktop", dest = "/usr/share/applications/orbmc.desktop", mode = "644" },
+    { source = "../assets/logo/orbmc.png", dest = "/usr/share/icons/hicolor/256x256/apps/orbmc.png", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+vulkan-loader = "*"
 
 [features]
 default = ["devtools"]

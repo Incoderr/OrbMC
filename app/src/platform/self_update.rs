@@ -8,20 +8,46 @@
 use std::io;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::LazyLock;
 
-/// Name of the release file this platform installs; `None` where releases
-/// are not published yet.
-pub const RELEASE_ASSET: Option<&str> = if cfg!(target_os = "windows") {
-    Some("OrbMC-Setup.exe")
+/// Platform part of release file names (`orbmc-1.2.3-windows-x64-setup.exe`);
+/// `None` where releases are not published yet.
+const RELEASE_PLATFORM: Option<&str> = if cfg!(not(target_os = "windows")) {
+    None
+} else if cfg!(target_arch = "x86_64") {
+    Some("windows-x64")
+} else if cfg!(target_arch = "aarch64") {
+    Some("windows-arm64")
 } else {
     None
 };
 
+/// Name of the release installer this platform updates with.
+pub fn release_asset(version: &str) -> Option<String> {
+    RELEASE_PLATFORM.map(|platform| format!("orbmc-{version}-{platform}-setup.exe"))
+}
+
+/// Downloaded installers of earlier versions, removed on start.
+const OLD_STAGING_NAMES: [&str; 1] = ["OrbMC-Setup.exe"];
+
 /// Where the update installer is downloaded.
 pub fn staging_path() -> PathBuf {
-    std::env::temp_dir()
-        .join("OrbMC update")
-        .join(RELEASE_ASSET.unwrap_or("orbmc-update"))
+    staging_directory().join("orbmc-setup.exe")
+}
+
+fn staging_directory() -> PathBuf {
+    std::env::temp_dir().join("OrbMC update")
+}
+
+/// Whether this launcher was set up by the installer. A portable copy must
+/// not run it: that would install a second launcher instead of updating it.
+pub fn installed() -> bool {
+    static INSTALLED: LazyLock<bool> = LazyLock::new(|| {
+        std::env::current_exe()
+            .map(|executable| executable.with_file_name("unins000.exe").is_file())
+            .unwrap_or(false)
+    });
+    *INSTALLED
 }
 
 /// Starts the silent update; the caller quits right after so the installer
@@ -44,6 +70,11 @@ const NO_LAUNCH_FLAG: &str = "/NOLAUNCH";
 /// files of the old self-replacing updater. Failures only leave a file.
 pub fn remove_leftovers() {
     let mut leftovers = vec![staging_path()];
+    leftovers.extend(
+        OLD_STAGING_NAMES
+            .into_iter()
+            .map(|name| staging_directory().join(name)),
+    );
     if let Ok(executable) = std::env::current_exe() {
         leftovers.push(executable.with_file_name("orbmc.old.exe"));
         leftovers.push(executable.with_file_name("orbmc.update.exe"));

@@ -103,16 +103,6 @@ impl InstancesView {
             .v_flex()
             .w_full()
             .gap_3()
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(palette.foreground))
-                    .child(IconName::Box)
-                    .child(locale.text("Мои профили", "My profiles")),
-            )
             .children(cards)
             .into_any_element()
     }

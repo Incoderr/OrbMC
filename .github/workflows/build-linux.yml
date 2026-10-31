@@ -1,0 +1,61 @@
+name: Build Linux
+
+# Builds the Linux packages (.deb, .rpm, AppImage, .tar.gz) into the
+# `orbmc-linux` artifact. Run it by hand to try a commit; the release
+# workflow calls it for tags.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA, branch, or tag to build
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # The oldest supported runner: the binary needs glibc 2.35 or newer.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install build libraries
+        run: bash packaging/linux/build-deps.sh
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install packaging tools
+        run: cargo install cargo-deb cargo-generate-rpm --locked
+
+      - name: Build launcher
+        env:
+          ORBMC_DISCORD_APP_ID: ${{ vars.ORBMC_DISCORD_APP_ID }}
+          ORBMC_UPDATE_PUBLIC_KEY: ${{ vars.ORBMC_UPDATE_PUBLIC_KEY }}
+          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+        run: cargo build --release --locked --package orbmc --no-default-features
+
+      - name: Package
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          bash packaging/linux/package.sh "$version" dist
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbmc-linux
+          path: dist/*
+          if-no-files-found: error

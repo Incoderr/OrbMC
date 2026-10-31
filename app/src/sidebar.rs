@@ -111,6 +111,7 @@ impl LauncherApp {
                     settings.save();
                     cx.notify();
                 });
+                this.sidebar_toggles += 1;
                 cx.notify();
             }))
             .child(if is_collapsed {

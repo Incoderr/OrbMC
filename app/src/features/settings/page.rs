@@ -126,6 +126,10 @@ impl SettingsView {
                     settings.save();
                     cx.notify();
                 });
+                // An update found while they were off starts downloading now.
+                if *checked {
+                    this.updater.update(cx, |updater, cx| updater.install(cx));
+                }
             }));
         let (update_hint, update_control) = self.update_controls(palette, locale, cx);
 
