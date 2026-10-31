@@ -56,29 +56,10 @@ impl AssetSource for LauncherAssets {
     }
 }
 
-/// After an update the previous launcher is still quitting; wait for it
-/// instead of handing over to it.
-fn acquire_single_instance() -> Option<platform::single_instance::InstanceGuard> {
-    let attempts = if platform::self_update::started_after_update() {
-        50
-    } else {
-        1
-    };
-    for attempt in 1..=attempts {
-        if let Some(guard) = platform::single_instance::acquire() {
-            return Some(guard);
-        }
-        if attempt < attempts {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-    }
-    None
-}
-
 fn main() -> Result<(), reqwest::Error> {
     // A second start only brings the running launcher forward.
     platform::logging::init();
-    let Some(_instance) = acquire_single_instance() else {
+    let Some(_instance) = platform::single_instance::acquire() else {
         platform::single_instance::activate_running();
         return Ok(());
     };

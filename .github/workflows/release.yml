@@ -1,7 +1,9 @@
 name: Release
 
-# Pushing a tag `vX.Y.Z` builds the launcher, signs it for in-app updates and
-# publishes a GitHub release. The tag must match the workspace version in
+# Pushing a tag `vX.Y.Z` builds the launcher and its installer, signs them for
+# in-app updates and publishes a GitHub release. Launchers from 0.3 on update
+# through OrbMC-Setup.exe; orbmc.exe stays in releases for older launchers,
+# which replace their executable with it. The tag must match the workspace version in
 # Cargo.toml: the launcher compares that version with the latest release.
 on:
   push:
@@ -52,12 +54,27 @@ jobs:
           CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
         run: cargo build --release --package orbmc --no-default-features --target x86_64-pc-windows-msvc
 
+      # windows-latest may come without Inno Setup.
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y | Out-Null
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          } else {
+            $iscc = $iscc.Source
+          }
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          & $iscc /Q "/DAppVersion=$version" "/DSourceExe=$PWD\target\x86_64-pc-windows-msvc\release\orbmc.exe" "/DOutputDir=$PWD\dist" installer\orbmc.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
       - name: Install rsign
         run: cargo install rsign2 --locked
 
       # The secret key is created without a password (`rsign generate -W`);
       # it only ever exists as a GitHub secret and in this job's temp folder.
-      - name: Sign executable
+      - name: Sign installer and executable
         shell: pwsh
         env:
           SECRET_KEY: ${{ secrets.ORBMC_UPDATE_SECRET_KEY }}
@@ -70,7 +87,10 @@ jobs:
           $encoded = ($env:SECRET_KEY -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1).Trim()
           Set-Content -Path $key -Value "untrusted comment: rsign encrypted secret key`n$encoded`n" -NoNewline
           try {
-            rsign sign -W -s $key -x dist/orbmc.exe.minisig -t "OrbMC $env:GITHUB_REF_NAME" dist/orbmc.exe
+            foreach ($file in "dist/OrbMC-Setup.exe", "dist/orbmc.exe") {
+              rsign sign -W -s $key -x "$file.minisig" -t "OrbMC $env:GITHUB_REF_NAME" $file
+              if ($LASTEXITCODE -ne 0) { throw "rsign failed for $file" }
+            }
           } finally {
             Remove-Item $key -Force
           }
@@ -79,4 +99,4 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME dist/orbmc.exe dist/orbmc.exe.minisig --title "OrbMC $env:GITHUB_REF_NAME" --generate-notes
+        run: gh release create $env:GITHUB_REF_NAME dist/OrbMC-Setup.exe dist/OrbMC-Setup.exe.minisig dist/orbmc.exe dist/orbmc.exe.minisig --title "OrbMC $env:GITHUB_REF_NAME" --generate-notes

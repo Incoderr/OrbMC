@@ -1,12 +1,12 @@
 //! Launcher updates from GitHub Releases.
 //!
 //! The latest release is compared with the running version. A release can be
-//! installed in place when this build knows the update public key and the
-//! release carries the executable with its minisign signature; the update is
-//! verified before it replaces the launcher and applies on the next start.
-//! Otherwise the launcher only points to the release page.
+//! installed when this build knows the update public key and the release
+//! carries the installer with its minisign signature. The installer is
+//! downloaded and verified in the background and runs silently when the user
+//! restarts or quits the launcher (`platform::self_update`). Otherwise the
+//! launcher only points to the release page.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,7 +23,7 @@ const RELEASES_API: &str = "https://api.github.com/repos/Incoderr/OrbMC/releases
 /// Public key (minisign) that release executables are signed with, baked in
 /// at build time. Builds without it never replace themselves.
 const UPDATE_PUBLIC_KEY: Option<&str> = option_env!("ORBMC_UPDATE_PUBLIC_KEY");
-const MAX_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_INSTALLER_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_SIGNATURE_BYTES: usize = 4 * 1024;
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(5);
 const RECHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -68,7 +68,7 @@ pub struct Release {
     pub version: Version,
     /// Release page with the notes, for builds that cannot update in place.
     pub page_url: String,
-    executable: Option<Asset>,
+    installer: Option<Asset>,
     signature: Option<Asset>,
 }
 
@@ -77,7 +77,7 @@ impl Release {
     pub fn installable(&self) -> bool {
         update_public_key().is_some()
             && !cfg!(debug_assertions)
-            && self.executable.is_some()
+            && self.installer.is_some()
             && self.signature.is_some()
     }
 }
@@ -99,10 +99,9 @@ pub enum UpdateStatus {
         version: Version,
         transfer: TransferHandle,
     },
-    /// The update replaced the executable; it runs from the next start.
+    /// The verified installer is downloaded; it runs on restart or quit.
     Ready {
         version: Version,
-        executable: PathBuf,
     },
     Failed(String),
 }
@@ -120,7 +119,7 @@ pub enum UpdateError {
     Download(#[from] DownloadError),
     #[error("Подпись обновления не прошла проверку, файл удалён")]
     Signature,
-    #[error("Не удалось заменить лаунчер: {0}")]
+    #[error("Не удалось подготовить обновление: {0}")]
     Install(std::io::Error),
 }
 
@@ -131,6 +130,7 @@ pub struct Updater {
     settings: Entity<SettingsState>,
     instances: Entity<InstancesState>,
     _schedule: Task<()>,
+    _install_on_quit: Subscription,
 }
 
 impl Updater {
@@ -152,11 +152,22 @@ impl Updater {
                 cx.background_executor().timer(RECHECK_INTERVAL).await;
             }
         });
+        // A downloaded update is installed when the user quits instead of
+        // restarting, like the next start would pick it up.
+        let install_on_quit = cx.on_app_quit(|this, _| {
+            if matches!(this.status, UpdateStatus::Ready { .. })
+                && let Err(error) = self_update::run_installer(false)
+            {
+                tracing::error!(%error, "failed to start the update installer on quit");
+            }
+            async {}
+        });
         Self {
             status: UpdateStatus::Idle,
             settings,
             instances,
             _schedule: schedule,
+            _install_on_quit: install_on_quit,
         }
     }
 
@@ -212,14 +223,14 @@ impl Updater {
         .detach();
     }
 
-    /// Downloads, verifies and installs the available release.
+    /// Downloads and verifies the installer of the available release.
     pub fn install(&mut self, cx: &mut Context<Self>) {
         let UpdateStatus::Available(release) = &self.status else {
             return;
         };
-        let (Some(public_key), Some(executable_asset), Some(signature_asset)) = (
+        let (Some(public_key), Some(installer_asset), Some(signature_asset)) = (
             update_public_key(),
-            release.executable.clone(),
+            release.installer.clone(),
             release.signature.clone(),
         ) else {
             return;
@@ -227,16 +238,6 @@ impl Updater {
         if !release.installable() {
             return;
         }
-        let executable = match self_update::current_executable() {
-            Ok(executable) => executable,
-            Err(error) => {
-                self.set_status(
-                    UpdateStatus::Failed(UpdateError::Install(error).to_string()),
-                    cx,
-                );
-                return;
-            }
-        };
         let version = release.version;
         let transfer = TransferHandle::default();
         self.set_status(
@@ -252,14 +253,12 @@ impl Updater {
             handle: transfer,
             executor: cx.background_executor().clone(),
         };
-        let target = executable.clone();
         let task = cx.background_executor().spawn(async move {
-            download_and_install(
+            download_installer(
                 client,
-                &executable_asset,
+                &installer_asset,
                 &signature_asset,
                 public_key,
-                &target,
                 &transfer,
             )
             .await
@@ -286,14 +285,8 @@ impl Updater {
             let result = task.await;
             let _ = this.update(cx, |this, cx| match result {
                 Ok(()) => {
-                    tracing::info!(%version, "launcher update installed");
-                    this.set_status(
-                        UpdateStatus::Ready {
-                            version,
-                            executable,
-                        },
-                        cx,
-                    );
+                    tracing::info!(%version, "launcher update downloaded");
+                    this.set_status(UpdateStatus::Ready { version }, cx);
                 }
                 Err(error) => {
                     tracing::warn!(%version, %error, "launcher update failed");
@@ -320,16 +313,17 @@ impl Updater {
             .any(|profile| instances.runtime(&profile.id).is_busy())
     }
 
-    /// Starts the installed update and quits this launcher.
+    /// Runs the update installer, which starts the new version, and quits.
     pub fn restart(&mut self, cx: &mut Context<Self>) {
-        let UpdateStatus::Ready { executable, .. } = &self.status else {
-            return;
-        };
-        if !self.can_restart(cx) {
+        if !matches!(self.status, UpdateStatus::Ready { .. }) || !self.can_restart(cx) {
             return;
         }
-        match self_update::restart(executable) {
-            Ok(()) => cx.quit(),
+        match self_update::run_installer(true) {
+            Ok(()) => {
+                // The quit hook must not start a second installer.
+                self.status = UpdateStatus::Idle;
+                cx.quit();
+            }
             Err(error) => {
                 tracing::error!(%error, "failed to start the updated launcher");
                 self.set_status(
@@ -380,12 +374,12 @@ fn newer_release(release: GitHubRelease, current: Version) -> Option<Release> {
                 size: asset.size,
             })
     };
-    let executable_name = self_update::RELEASE_ASSET;
+    let installer_name = self_update::RELEASE_ASSET;
     Some(Release {
         version,
         page_url: release.html_url.clone(),
-        executable: executable_name.and_then(asset),
-        signature: executable_name.and_then(|name| asset(&format!("{name}.minisig"))),
+        installer: installer_name.and_then(asset),
+        signature: installer_name.and_then(|name| asset(&format!("{name}.minisig"))),
     })
 }
 
@@ -443,24 +437,28 @@ async fn fetch_signature(client: &Arc<dyn HttpClient>, url: &str) -> Result<Stri
     String::from_utf8(body).map_err(|_| UpdateError::Signature)
 }
 
-async fn download_and_install(
+/// Downloads the installer to `self_update::staging_path` and keeps it only
+/// if its signature checks out.
+async fn download_installer(
     client: Arc<dyn HttpClient>,
-    executable_asset: &Asset,
+    installer_asset: &Asset,
     signature_asset: &Asset,
     public_key: &str,
-    executable: &Path,
     transfer: &Transfer,
 ) -> Result<(), UpdateError> {
     let signature = fetch_signature(&client, &signature_asset.url).await?;
-    let staging = self_update::staging_path(executable);
+    let staging = self_update::staging_path();
+    if let Some(directory) = staging.parent() {
+        std::fs::create_dir_all(directory).map_err(UpdateError::Install)?;
+    }
     download_file(
         client,
         FileDownload {
-            url: &executable_asset.url,
+            url: &installer_asset.url,
             destination: &staging,
-            size: Some(executable_asset.size),
+            size: Some(installer_asset.size),
             sha1: None,
-            max_size: MAX_EXECUTABLE_BYTES,
+            max_size: MAX_INSTALLER_BYTES,
         },
         transfer,
     )
@@ -472,10 +470,7 @@ async fn download_and_install(
         let _ = std::fs::remove_file(&staging);
         return Err(error);
     }
-    self_update::install(executable, &staging).map_err(|error| {
-        let _ = std::fs::remove_file(&staging);
-        UpdateError::Install(error)
-    })
+    Ok(())
 }
 
 /// Checks a minisign signature. The key may be the whole `.pub` file or just
@@ -514,7 +509,7 @@ mod tests {
             html_url: "https://github.com/Incoderr/OrbMC/releases/tag/v1".into(),
             draft: false,
             prerelease: false,
-            assets: ["orbmc.exe", "orbmc.exe.minisig"]
+            assets: ["OrbMC-Setup.exe", "OrbMC-Setup.exe.minisig"]
                 .into_iter()
                 .map(|name| GitHubAsset {
                     name: name.into(),
@@ -539,7 +534,7 @@ mod tests {
         if self_update::RELEASE_ASSET.is_some() {
             assert_eq!(
                 release.signature.map(|asset| asset.url),
-                Some("https://example.com/orbmc.exe.minisig".to_owned())
+                Some("https://example.com/OrbMC-Setup.exe.minisig".to_owned())
             );
         }
     }

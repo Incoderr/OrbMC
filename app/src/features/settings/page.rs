@@ -848,8 +848,8 @@ impl SettingsView {
                             "{} {version} {}",
                             locale.text("Версия", "Version"),
                             locale.text(
-                                "установлена: перезапусти лаунчер",
-                                "is installed: restart the launcher"
+                                "скачана: перезапусти лаунчер, чтобы установить",
+                                "is downloaded: restart the launcher to install it"
                             ),
                         ),
                         action(
@@ -867,8 +867,8 @@ impl SettingsView {
                             "{} {version} {}",
                             locale.text("Версия", "Version"),
                             locale.text(
-                                "установлена и запустится, когда закончатся игра и загрузки",
-                                "is installed and starts once games and downloads finish"
+                                "скачана и установится при выходе из лаунчера",
+                                "is downloaded and installs when you quit the launcher"
                             ),
                         ),
                         quiet(String::new()),
