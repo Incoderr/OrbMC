@@ -42,6 +42,9 @@ struct LauncherAssets;
 
 impl AssetSource for LauncherAssets {
     fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
+        if let Some(icon) = shell::icons::RemixIcons.load(path)? {
+            return Ok(Some(icon));
+        }
         if let Some(icon) = ExtraLucideIcons.load(path)? {
             return Ok(Some(icon));
         }
@@ -52,6 +55,11 @@ impl AssetSource for LauncherAssets {
     fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
         let mut assets = gpui_kit::assets::Assets.list(path)?;
         assets.extend(ExtraLucideIcons.list(path)?);
+        for icon in shell::icons::RemixIcons.list(path)? {
+            if !assets.contains(&icon) {
+                assets.push(icon);
+            }
+        }
         Ok(assets)
     }
 }

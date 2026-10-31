@@ -97,6 +97,8 @@ pub struct InstancesState {
     samples: HashMap<InstanceId, ProgressSample>,
     /// Output of the latest game session per build.
     logs: HashMap<InstanceId, super::game_log::GameLog>,
+    /// When the running game of a build started, for its play time.
+    sessions: HashMap<InstanceId, Instant>,
 }
 
 /// One speed measurement point for an install: the anchor from which the
@@ -146,7 +148,18 @@ impl InstancesState {
             samples: HashMap::new(),
             worlds: HashMap::new(),
             logs: HashMap::new(),
+            sessions: HashMap::new(),
         }
+    }
+
+    /// Play time of a build, the running session included.
+    pub fn play_time(&self, id: InstanceId) -> Duration {
+        let saved = self.profile(id).map_or(0, |profile| profile.play_time_secs);
+        let current = self
+            .sessions
+            .get(&id)
+            .map_or(Duration::ZERO, Instant::elapsed);
+        Duration::from_secs(saved) + current
     }
 
     pub fn game_log(&self, id: InstanceId) -> Option<&super::game_log::GameLog> {
@@ -492,6 +505,12 @@ impl InstancesState {
         }
     }
 
+    pub fn set_jvm_arguments(&mut self, id: InstanceId, arguments: String) {
+        if let Some(profile) = self.profiles.iter_mut().find(|profile| profile.id == id) {
+            profile.jvm_arguments = arguments.trim().to_owned();
+        }
+    }
+
     /// Sets the game and loader of a build created from a modpack once the
     /// pack's own index is known.
     pub fn set_game(
@@ -565,6 +584,7 @@ impl InstancesState {
         }
         self.runtime
             .insert(id, InstanceRuntime::Running { process_id });
+        self.sessions.insert(id, Instant::now());
     }
 
     pub fn mark_game_stopped(
@@ -573,6 +593,13 @@ impl InstancesState {
         exit_code: Option<i32>,
         stderr: Option<String>,
     ) {
+        if let Some(started) = self.sessions.remove(&id)
+            && let Some(profile) = self.profiles.iter_mut().find(|profile| profile.id == id)
+        {
+            profile.play_time_secs = profile
+                .play_time_secs
+                .saturating_add(started.elapsed().as_secs());
+        }
         if self
             .profiles
             .iter()

@@ -251,26 +251,7 @@ impl Render for LauncherApp {
             .collect();
         let settings_button = self.navigation_button(Page::Settings, palette, locale, cx);
         let collapse_button = self.sidebar_toggle_button(palette, locale, cx);
-        let sidebar_header = div()
-            .h_flex()
-            .w_full()
-            .items_center()
-            .justify_end()
-            .child(collapse_button)
-            .into_any_element();
-        let navigation = if self.settings.read(cx).sidebar_collapsed() {
-            div().v_flex().gap_2()
-        } else {
-            div().v_flex().gap_2().child(
-                div()
-                    .px_3()
-                    .text_size(px(10.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(palette.muted))
-                    .child(locale.text("БИБЛИОТЕКА", "LIBRARY")),
-            )
-        }
-        .children(navigation_items);
+        let navigation = div().v_flex().gap_2().children(navigation_items);
         let page_body = match active_page {
             Page::Home | Page::Instances | Page::InstanceDetails(_) => {
                 use crate::features::instances::BuildsScreen;
@@ -317,7 +298,7 @@ impl Render for LauncherApp {
             .bg(rgb(palette.sidebar))
             .border_r_1()
             .border_color(rgb(palette.border))
-            .child(sidebar_header)
+            .child(collapse_button)
             .child(navigation)
             .child(div().flex_1())
             .children(update)

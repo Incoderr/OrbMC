@@ -42,6 +42,9 @@ pub struct JavaProbe {
 pub struct JavaResolution {
     pub executable: PathBuf,
     pub probe: JavaProbe,
+    /// The configured Java was skipped because its file no longer exists;
+    /// the caller should forget that setting.
+    pub custom_missing: bool,
 }
 
 /// Why no usable Java runtime could be chosen. The messages are shown to the
@@ -118,7 +121,9 @@ pub fn probe(executable: &Path) -> Option<JavaProbe> {
 /// Chooses a Java runtime that satisfies `requirement`.
 ///
 /// An explicitly configured `custom_executable` is honored as long as it can
-/// be probed and satisfies the requirement. Otherwise an installed runtime of
+/// be probed and satisfies the requirement. A configured file that no longer
+/// exists (the user removed that Java) is skipped with `custom_missing` set,
+/// and the runtime is chosen as if none was configured. Otherwise an installed runtime of
 /// exactly the declared major version is used; when there is none, the
 /// official Mojang runtime for that version (a JRE, the same one the official
 /// launcher uses) is downloaded into the launcher's `runtime` directory. A
@@ -131,7 +136,17 @@ pub fn resolve_java(
     minecraft_directory: &Path,
     mut on_status: impl FnMut(String),
 ) -> Result<JavaResolution, JavaError> {
-    if let Some(executable) = custom_executable {
+    let custom_missing = match custom_executable {
+        Some(executable) if !executable.is_file() => {
+            tracing::warn!(
+                path = %executable.display(),
+                "the configured Java no longer exists; choosing one automatically"
+            );
+            true
+        }
+        _ => false,
+    };
+    if let Some(executable) = custom_executable.filter(|_| !custom_missing) {
         let Some(probe) = probe(executable) else {
             return Err(JavaError::UnreadableCustom {
                 path: executable.to_path_buf(),
@@ -146,6 +161,7 @@ pub fn resolve_java(
         return Ok(JavaResolution {
             executable: executable.to_path_buf(),
             probe,
+            custom_missing,
         });
     }
 
@@ -159,6 +175,7 @@ pub fn resolve_java(
         return Ok(JavaResolution {
             executable: matched.executable.clone(),
             probe: matched.clone(),
+            custom_missing,
         });
     }
 
@@ -182,6 +199,7 @@ pub fn resolve_java(
                 return Ok(JavaResolution {
                     executable: fallback.executable.clone(),
                     probe: fallback.clone(),
+                    custom_missing,
                 });
             }
             return Err(JavaError::DownloadFailed {
@@ -195,7 +213,11 @@ pub fn resolve_java(
         return Err(JavaError::BrokenDownload { major_version });
     };
     tracing::info!(java = %probe.version, "installed Java runtime");
-    Ok(JavaResolution { executable, probe })
+    Ok(JavaResolution {
+        executable,
+        probe,
+        custom_missing,
+    })
 }
 
 fn describe(probe: &JavaProbe) -> (u32, &str) {
@@ -289,6 +311,17 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("Java 21+"));
         assert!(message.contains("Java 17 (17.0.2)"));
+    }
+
+    /// Downloads Mojang's Java 8 runtime, whose files are `.lzma` compressed.
+    /// Needs the network: `cargo test -p orbmc --bin orbmc -- --ignored`.
+    #[test]
+    #[ignore = "downloads about 40 MB from Mojang"]
+    fn mojang_runtime_downloads_and_runs() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let executable = download_runtime(8, directory.path()).expect("runtime installs");
+        let probe = probe(&executable).expect("downloaded Java runs");
+        assert_eq!(probe.major_version, 8);
     }
 
     #[test]

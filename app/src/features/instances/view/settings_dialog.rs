@@ -3,6 +3,7 @@ use crate::features::settings::*;
 use crate::shared::ui::field_label;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::slider::{Slider, SliderState};
 use gpui_kit::*;
 
@@ -26,6 +27,11 @@ impl InstancesView {
         });
         let locale = self.locale;
         let palette = self.palette;
+        let jvm_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("-XX:+UseG1GC -Dfile.encoding=UTF-8")
+                .default_value(profile.jvm_arguments.clone())
+        });
         let title = format!(
             "{} · {profile_name}",
             locale.text("Настройки сборки", "Profile settings")
@@ -34,6 +40,7 @@ impl InstancesView {
         window.open_dialog(cx, move |dialog, _, _| {
             let content_owner = owner.clone();
             let content_slider = memory_slider.clone();
+            let content_jvm_input = jvm_input.clone();
             dialog
                 .w(px(520.))
                 .title(title.clone())
@@ -58,6 +65,7 @@ impl InstancesView {
                     let automatic_owner = content_owner.clone();
                     let save_owner = content_owner.clone();
                     let save_slider = content_slider.clone();
+                    let save_jvm_input = content_jvm_input.clone();
 
                     content.child(
                         div()
@@ -194,6 +202,25 @@ impl InstancesView {
                                         "The selected Java must support this Minecraft version.",
                                     )),
                             )
+                            .child(div().h(px(1.)).w_full().bg(rgb(palette.border)))
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap_2()
+                                    .child(field_label(
+                                        locale.text("Аргументы JVM", "JVM arguments"),
+                                    ))
+                                    .child(Input::new(&content_jvm_input))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(rgb(palette.muted))
+                                            .child(locale.text(
+                                                "Через пробел; значения с пробелами — в кавычках.                                                  Свой -Xmx заменит лимит памяти выше.",
+                                                "Separated by spaces; quote values with spaces.                                                  Your own -Xmx overrides the memory limit above.",
+                                            )),
+                                    ),
+                            )
                             .child(
                                 UiButton::new(format!("profile-settings-save-{id}"))
                                     .cursor_pointer()
@@ -207,10 +234,13 @@ impl InstancesView {
                                     .on_click(move |_, window, cx| {
                                         let memory_mb =
                                             save_slider.read(cx).value().end().round() as u32;
+                                        let jvm_arguments =
+                                            save_jvm_input.read(cx).value().to_string();
                                         if let Some(owner) = save_owner.upgrade() {
                                             owner.update(cx, |this, cx| {
                                                 this.instances.update(cx, |instances, _| {
-                                                    instances.set_memory_mb(id, memory_mb)
+                                                    instances.set_memory_mb(id, memory_mb);
+                                                    instances.set_jvm_arguments(id, jvm_arguments);
                                                 });
                                                 this.instances.read(cx).save();
                                                 cx.notify();

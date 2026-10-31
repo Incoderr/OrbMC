@@ -62,6 +62,11 @@ pub enum InstanceWorkerEvent {
         id: InstanceId,
         detail: Option<String>,
     },
+    /// The build's configured Java no longer exists and was replaced by an
+    /// automatic choice; the setting should be cleared.
+    CustomJavaMissing {
+        id: InstanceId,
+    },
     /// One line the game printed to stdout or stderr.
     Output {
         id: InstanceId,
@@ -210,6 +215,9 @@ fn install(
             });
         },
     )?;
+    if resolution.custom_missing {
+        let _ = events.unbounded_send(InstanceWorkerEvent::CustomJavaMissing { id });
+    }
 
     let launcher = Launcher::new(minecraft_directory);
     let request = InstallRequest {
@@ -313,6 +321,9 @@ fn launch(
     );
     let _ = events.unbounded_send(InstanceWorkerEvent::PreparingJava { id, detail: None });
     let resolution = resolution?;
+    if resolution.custom_missing {
+        let _ = events.unbounded_send(InstanceWorkerEvent::CustomJavaMissing { id });
+    }
     let java_executable = resolution.executable.clone();
     let java_probe = resolution.probe;
 
@@ -372,6 +383,7 @@ fn launch(
         profile.memory_mb,
         &instance_layout::jvm_log_directory(&data_directory),
         jvm_options,
+        orbmc_core::minecraft::launch::split_arguments(&profile.jvm_arguments),
         quick_play_args,
     );
     let mut process = Command::new(&command.executable);

@@ -32,6 +32,19 @@ pub(crate) fn format_speed(bytes_per_second: f64) -> String {
     }
 }
 
+/// Play time as hours and minutes: `3 ч 5 мин`, `45 min`.
+pub(crate) fn format_play_time(time: std::time::Duration, locale: Locale) -> String {
+    let minutes = time.as_secs() / 60;
+    let (hours, minutes) = (minutes / 60, minutes % 60);
+    let (hour, minute) = (locale.text("ч", "h"), locale.text("мин", "min"));
+    match (hours, minutes) {
+        (0, 0) => locale.text("меньше минуты", "under a minute").to_owned(),
+        (0, minutes) => format!("{minutes} {minute}"),
+        (hours, 0) => format!("{hours} {hour}"),
+        (hours, minutes) => format!("{hours} {hour} {minutes} {minute}"),
+    }
+}
+
 /// Maps vendor install stage names to localized labels.
 pub(crate) fn stage_label(stage: &str, locale: Locale) -> &str {
     match stage {
@@ -98,7 +111,9 @@ pub(crate) fn install_progress_view(
 
 #[cfg(test)]
 mod tests {
-    use super::format_speed;
+    use super::{format_play_time, format_speed};
+    use crate::features::settings::Locale;
+    use std::time::Duration;
 
     #[test]
     fn speed_labels_pick_the_nearest_unit() {
@@ -108,5 +123,18 @@ mod tests {
         assert_eq!(format_speed(48_123.), "47 KiB/s");
         assert_eq!(format_speed(1_572_864.), "1.5 MiB/s");
         assert_eq!(format_speed(-5.), "0 B/s");
+    }
+
+    #[test]
+    fn play_time_shows_hours_and_minutes() {
+        let label = |secs| format_play_time(Duration::from_secs(secs), Locale::Ru);
+        assert_eq!(label(59), "меньше минуты");
+        assert_eq!(label(45 * 60 + 30), "45 мин");
+        assert_eq!(label(2 * 3600), "2 ч");
+        assert_eq!(label(3 * 3600 + 5 * 60), "3 ч 5 мин");
+        assert_eq!(
+            format_play_time(Duration::from_secs(100 * 3600 + 60), Locale::En),
+            "100 h 1 min"
+        );
     }
 }

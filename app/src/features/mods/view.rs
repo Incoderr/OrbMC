@@ -929,21 +929,11 @@ impl CatalogView {
         cx.notify();
     }
 
-    /// The profile a mod should be removed from: the selected target if one is
-    /// active, otherwise the single profile the mod is installed in.
-    pub(crate) fn uninstall_target(&self, project_id: &str, cx: &App) -> Option<InstanceId> {
-        if let Some(id) = self.mods.target_profile() {
-            return self.mods.installed.contains(id, project_id).then_some(id);
-        }
-        let mut candidates = self
-            .instances
-            .read(cx)
-            .profiles()
-            .iter()
-            .filter(|profile| self.mods.installed.contains(profile.id, project_id))
-            .map(|profile| profile.id);
-        let first = candidates.next()?;
-        candidates.all(|id| id == first).then_some(first)
+    /// The selected build, when the mod is installed there. Without a
+    /// selected build the catalog offers no removal.
+    pub(crate) fn uninstall_target(&self, project_id: &str) -> Option<InstanceId> {
+        let id = self.mods.target_profile()?;
+        self.mods.installed.contains(id, project_id).then_some(id)
     }
 }
 

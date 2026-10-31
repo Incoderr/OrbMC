@@ -40,8 +40,11 @@ vendor/
                              install/launch engine (see §3)
   gpui-pre/                  patched copy of gpui-pre 0.3.7 (inspector fixes)
 assets/logo/                 application icon (embedded by app/build.rs)
+assets/icons/remix/          Remix Icon SVGs (Apache-2.0), see `shell/icons.rs`
 installer/orbmc.iss          Windows installer (Inno Setup)
 packaging/linux/             Linux .desktop file and packaging scripts
+site/                        project website (static HTML; download links come
+                             from the latest GitHub release at run time)
 ```
 
 `platform` is a module inside `app`, not a separate crate. Do not create
@@ -155,6 +158,10 @@ These are the conventions the code already follows. Use them for new work.
 - **Blocking is fine off the UI thread.** `reqwest::blocking`, file IO and
   hashing are allowed inside `background_executor` tasks and worker threads,
   never in `render`, listeners or `update` closures.
+- **Icons are Remix.** Use `IconName::…` as usual: `shell::icons` serves a
+  Remix SVG under the Lucide path it replaces, inside gpui-component too.
+  A new `IconName` needs its Remix file in `assets/icons/remix` and a line
+  in `shell::icons::ICONS`, otherwise it shows up as Lucide.
 - **Clickable things show a hand.** Every `UiButton`/`ComponentButton`
   gets `.cursor_pointer()`; neither sets it by itself.
 - **Text people may want to copy** (names, messages, logs) goes through

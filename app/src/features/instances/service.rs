@@ -154,9 +154,15 @@ impl InstancesState {
             InstanceWorkerEvent::PreparingJava { id, detail } => {
                 self.mark_preparing_java(id, detail)
             }
+            InstanceWorkerEvent::CustomJavaMissing { id } => {
+                self.set_java_path(id, None);
+                self.save();
+            }
             InstanceWorkerEvent::Output { id, line } => self.push_log_line(id, line),
             InstanceWorkerEvent::GameExited { id, code, stderr } => {
                 self.mark_game_stopped(id, code, stderr);
+                // Keeps the play time of the session that just ended.
+                self.save();
                 cx.emit(InstanceEvent::GameExited(id));
             }
         }

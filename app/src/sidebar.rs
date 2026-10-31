@@ -90,11 +90,35 @@ impl LauncherApp {
             locale.text("Свернуть панель", "Collapse sidebar")
         };
 
-        UiButton::new("sidebar-toggle")
+        let icon = if is_collapsed {
+            IconName::PanelLeftOpen
+        } else {
+            IconName::PanelLeftClose
+        };
+        let content = if is_collapsed {
+            div()
+                .w_full()
+                .flex()
+                .justify_center()
+                .child(icon)
+                .into_any_element()
+        } else {
+            div()
+                .w_full()
+                .h_flex()
+                .items_center()
+                .gap_3()
+                .child(icon)
+                .child(locale.text("Свернуть", "Collapse"))
+                .into_any_element()
+        };
+
+        let button = UiButton::new("sidebar-toggle")
             .cursor_pointer()
-            .w(px(24.))
-            .h(px(24.))
-            .rounded(px(6.))
+            .w_full()
+            .px_3()
+            .py_3()
+            .rounded(px(8.))
             .bg(rgb(palette.sidebar))
             .text_color(rgb(palette.muted))
             .hover(|style| {
@@ -104,7 +128,6 @@ impl LauncherApp {
             })
             .active(|style| style.bg(rgb(palette.pressed)))
             .accessibility_label(title)
-            .tooltip(move |window, cx| Tooltip::new(title).build(window, cx))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.settings.update(cx, |settings, cx| {
                     settings.toggle_sidebar();
@@ -114,11 +137,14 @@ impl LauncherApp {
                 this.sidebar_toggles += 1;
                 cx.notify();
             }))
-            .child(if is_collapsed {
-                IconName::PanelLeftOpen
-            } else {
-                IconName::PanelLeftClose
-            })
-            .into_any_element()
+            .child(content);
+        // Expanded, the label already says what the button does.
+        let button = if is_collapsed {
+            button.tooltip(move |window, cx| Tooltip::new(title).build(window, cx))
+        } else {
+            button
+        };
+
+        button.into_any_element()
     }
 }

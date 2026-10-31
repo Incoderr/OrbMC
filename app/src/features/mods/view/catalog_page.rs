@@ -991,7 +991,7 @@ impl CatalogView {
         // text onto unrelated cards.
         let installing = self.mods.installed.is_installing(&project.id);
         let download_project = project.clone();
-        let uninstall_target = self.uninstall_target(&project.id, cx);
+        let uninstall_target = self.uninstall_target(&project.id);
         div()
             .v_flex()
             .items_end()
@@ -1058,7 +1058,7 @@ impl CatalogView {
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.uninstall_mod(uninstall_project.clone(), target_id, cx);
                                 }))
-                                .child(IconName::Delete),
+                                .child(IconName::Trash),
                         )
                     }),
             )

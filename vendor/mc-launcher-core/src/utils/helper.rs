@@ -97,7 +97,10 @@ pub fn download_file(
     }
     let mut file = BufWriter::new(File::create(&path)?);
     if lzma_compressed {
-        let mut decoder = XzDecoder::new(response);
+        // Mojang serves runtime files as legacy `.lzma` (LZMA-alone), which
+        // the plain `.xz` decoder rejects; the auto decoder reads both.
+        let stream = xz2::stream::Stream::new_auto_decoder(u64::MAX, 0)?;
+        let mut decoder = XzDecoder::new_stream(response, stream);
         io::copy(&mut decoder, &mut file)?;
     } else {
         io::copy(&mut response, &mut file)?;

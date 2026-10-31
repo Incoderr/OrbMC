@@ -11,13 +11,16 @@ pub const MEMORY_LIMITS_MB: (u32, u32) = (512, 16_384);
 /// quarter of it within 512–1024 MiB) and replaces any heap flags the engine
 /// produced. JVM crash dumps are written to `crash_logs` instead of the game
 /// directory. `jvm_options` (the authlib-injector agent) follow the
-/// launcher's own options, in front of the classpath and main class; `extra`
-/// (Quick Play) goes last.
+/// launcher's own options, then the user's `custom_options` from the build
+/// settings, all in front of the classpath and main class. The JVM takes the
+/// last value of a repeated flag, so a custom `-Xmx` wins over the build's
+/// memory setting. `extra` (Quick Play) goes last.
 pub fn launch_arguments(
     engine_arguments: &[String],
     memory_mb: u32,
     crash_logs: &Path,
     jvm_options: Vec<String>,
+    custom_options: Vec<String>,
     extra: Vec<String>,
 ) -> Vec<String> {
     let max_memory_mb = memory_mb.clamp(MEMORY_LIMITS_MB.0, MEMORY_LIMITS_MB.1);
@@ -35,6 +38,7 @@ pub fn launch_arguments(
         ),
     ];
     arguments.extend(jvm_options);
+    arguments.extend(custom_options);
     arguments.extend(
         engine_arguments
             .iter()
@@ -42,6 +46,38 @@ pub fn launch_arguments(
             .cloned(),
     );
     arguments.extend(extra);
+    arguments
+}
+
+/// Splits JVM options typed by the user into arguments: whitespace separates
+/// them, double quotes keep spaces inside one (`-Dpath="C:/My Games"`).
+/// An unclosed quote runs to the end of the text.
+pub fn split_arguments(text: &str) -> Vec<String> {
+    let mut arguments = Vec::new();
+    let mut current = String::new();
+    let mut in_argument = false;
+    let mut quoted = false;
+    for character in text.chars() {
+        match character {
+            '"' => {
+                quoted = !quoted;
+                in_argument = true;
+            }
+            character if character.is_whitespace() && !quoted => {
+                if in_argument {
+                    arguments.push(std::mem::take(&mut current));
+                    in_argument = false;
+                }
+            }
+            character => {
+                current.push(character);
+                in_argument = true;
+            }
+        }
+    }
+    if in_argument {
+        arguments.push(current);
+    }
     arguments
 }
 
@@ -61,6 +97,7 @@ mod tests {
             8192,
             Path::new("logs"),
             vec!["-javaagent:injector.jar=ely.by".into()],
+            vec!["-XX:+UseG1GC".into()],
             vec!["--quickPlaySingleplayer".into()],
         );
         assert_eq!(arguments[0], "-Xms1024M");
@@ -71,6 +108,7 @@ mod tests {
             &arguments[4..],
             [
                 "-javaagent:injector.jar=ely.by",
+                "-XX:+UseG1GC",
                 "-cp",
                 "client.jar",
                 "--quickPlaySingleplayer"
@@ -80,9 +118,28 @@ mod tests {
 
     #[test]
     fn memory_is_clamped_to_the_limits() {
-        let low = launch_arguments(&[], 100, Path::new("l"), Vec::new(), Vec::new());
+        let low = launch_arguments(&[], 100, Path::new("l"), vec![], vec![], vec![]);
         assert_eq!(&low[..2], ["-Xms512M", "-Xmx512M"]);
-        let high = launch_arguments(&[], 1_000_000, Path::new("l"), Vec::new(), Vec::new());
+        let high = launch_arguments(&[], 1_000_000, Path::new("l"), vec![], vec![], vec![]);
         assert_eq!(high[1], "-Xmx16384M");
+    }
+
+    #[test]
+    fn custom_options_split_on_whitespace_and_keep_quoted_spaces() {
+        assert_eq!(
+            split_arguments(
+                "  -XX:+UseG1GC	-Dfile.encoding=UTF-8
+"
+            ),
+            ["-XX:+UseG1GC", "-Dfile.encoding=UTF-8"]
+        );
+        assert_eq!(
+            split_arguments(r#"-Dpath="C:/My Games/mc" "-Dname=a b""#),
+            ["-Dpath=C:/My Games/mc", "-Dname=a b"]
+        );
+        assert_eq!(split_arguments(r#"-Dempty="""#), ["-Dempty="]);
+        assert_eq!(split_arguments(r#""""#), [""]);
+        assert!(split_arguments("   ").is_empty());
+        assert_eq!(split_arguments(r#"-Dx="open end"#), ["-Dx=open end"]);
     }
 }

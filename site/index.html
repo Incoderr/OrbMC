@@ -1,0 +1,2144 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>OrbMC: быстрый и легкий лаунчер</title>
+        <meta
+            name="description"
+            content="OrbMC устанавливает загрузчик, моды из каталога Modrinth и подходящую версию Java для каждой сборки. Бесплатный лаунчер Minecraft с открытым кодом для Windows и Linux."
+        />
+        <meta property="og:title" content="OrbMC: быстрый и легкий лаунчер" />
+        <meta
+            property="og:description"
+            content="Загрузчик, моды и Java для каждой сборки устанавливаются автоматически. Бесплатно, открытый код, Windows и Linux."
+        />
+        <meta property="og:type" content="website" />
+        <meta property="og:image" content="logo.png" />
+        <meta name="twitter:card" content="summary" />
+        <link rel="icon" href="logo.svg" type="image/svg+xml" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Geist+Mono:wght@500&display=swap"
+            rel="stylesheet"
+        />
+        <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "FAQPage",
+                "inLanguage": "ru",
+                "mainEntity": [
+                    {
+                        "@type": "Question",
+                        "name": "Сколько стоит OrbMC?",
+                        "acceptedAnswer": {
+                            "@type": "Answer",
+                            "text": "OrbMC бесплатен. Исходный код открыт под лицензией GPL 3.0."
+                        }
+                    },
+                    {
+                        "@type": "Question",
+                        "name": "Нужен ли аккаунт Microsoft?",
+                        "acceptedAnswer": {
+                            "@type": "Answer",
+                            "text": "Нет. Можно играть под локальным ником или войти через Ely.by."
+                        }
+                    },
+                    {
+                        "@type": "Question",
+                        "name": "Как обновляется лаунчер?",
+                        "acceptedAnswer": {
+                            "@type": "Answer",
+                            "text": "Версия с установщиком для Windows обновляется автоматически при перезапуске. Portable и сборки для Linux сообщают о новой версии и открывают страницу загрузки."
+                        }
+                    }
+                ]
+            }
+        </script>
+        <style>
+            /* Tokens: spacing, radius and type follow the landing-page-design scale. */
+            :root {
+                --s-25: 2px;
+                --s-50: 4px;
+                --s-75: 8px;
+                --s-100: 12px;
+                --s-200: 16px;
+                --s-300: 24px;
+                --s-400: 32px;
+                --s-500: 40px;
+                --s-600: 48px;
+                --s-700: 64px;
+                --s-800: 80px;
+                --s-900: 96px;
+                --r-sm: 4px;
+                --r-md: 6px;
+                --r-lg: 8px;
+                --r-xl: 12px;
+                --r-2xl: 16px;
+                --r-3xl: 24px;
+
+                --bg: #000000;
+                --surface: #181818;
+                --surface-2: #1f1f1f;
+                --surface-3: #272727;
+                --line: #313131;
+                --text: #ffffff;
+                --muted: #a3a3a3;
+                --accent: #7b61f0;
+                --accent-hover: #8a73f3;
+                --accent-text: #b4a8ff;
+
+                --ease: cubic-bezier(0.22, 1, 0.36, 1);
+                --max: 1120px;
+                color-scheme: dark;
+            }
+            * {
+                box-sizing: border-box;
+            }
+            html {
+                scroll-behavior: smooth;
+                scroll-padding-top: var(--s-900);
+            }
+            body {
+                margin: 0;
+                background: var(--bg);
+                color: var(--text);
+                font-family: Manrope, system-ui, sans-serif;
+                font-size: 16px;
+                line-height: 24px;
+                font-weight: 400;
+                -webkit-font-smoothing: antialiased;
+                overflow-x: hidden;
+            }
+            a {
+                color: inherit;
+                text-decoration: none;
+            }
+            img,
+            svg {
+                display: block;
+            }
+            h1,
+            h2,
+            h3,
+            p,
+            ol,
+            ul {
+                margin: 0;
+            }
+            ol,
+            ul {
+                padding: 0;
+                list-style: none;
+            }
+            h1,
+            h2,
+            h3 {
+                text-wrap: balance;
+            }
+            p,
+            li,
+            dd {
+                text-wrap: pretty;
+            }
+
+            /* Language switch: elements in the other language are hidden. */
+            html[lang="ru"] [lang="en"],
+            html[lang="en"] [lang="ru"] {
+                display: none !important;
+            }
+
+            /* Text styles */
+            .heading-1 {
+                font-size: 60px;
+                line-height: 60px;
+                font-weight: 600;
+                letter-spacing: -0.02em;
+            }
+            .heading-2 {
+                font-size: 48px;
+                line-height: 48px;
+                font-weight: 600;
+                letter-spacing: -0.02em;
+            }
+            .heading-3 {
+                font-size: 36px;
+                line-height: 40px;
+                font-weight: 600;
+                letter-spacing: -0.01em;
+            }
+            .heading-4 {
+                font-size: 30px;
+                line-height: 36px;
+                font-weight: 600;
+            }
+            .heading-6 {
+                font-size: 20px;
+                line-height: 28px;
+                font-weight: 600;
+            }
+            .title-2 {
+                font-size: 18px;
+                line-height: 28px;
+                font-weight: 500;
+            }
+            .title-3 {
+                font-size: 16px;
+                line-height: 24px;
+                font-weight: 500;
+            }
+            .title-4 {
+                font-size: 14px;
+                line-height: 20px;
+                font-weight: 500;
+            }
+            .body-3 {
+                font-size: 16px;
+                line-height: 24px;
+                font-weight: 400;
+            }
+            .body-6 {
+                font-size: 14px;
+                line-height: 20px;
+                font-weight: 400;
+            }
+            .button-md {
+                font-size: 16px;
+                line-height: 24px;
+                font-weight: 600;
+            }
+            .button-sm {
+                font-size: 14px;
+                line-height: 20px;
+                font-weight: 600;
+            }
+            .caption-2 {
+                font-size: 14px;
+                line-height: 20px;
+                font-weight: 400;
+            }
+            .caption-3 {
+                font-size: 12px;
+                line-height: 16px;
+                font-weight: 600;
+            }
+            .caption-5 {
+                font-size: 12px;
+                line-height: 16px;
+                font-weight: 400;
+            }
+            .mono {
+                font-family: "Geist Mono", ui-monospace, monospace;
+            }
+            .muted {
+                color: var(--muted);
+            }
+
+            .wrap {
+                max-width: var(--max);
+                margin: 0 auto;
+                padding: 0 var(--s-300);
+            }
+            .ic {
+                width: 20px;
+                height: 20px;
+                flex: none;
+            }
+            .ic-sm {
+                width: 16px;
+                height: 16px;
+                flex: none;
+            }
+            /* Phosphor symbols carry no fill of their own: icons take the text colour. */
+            .ic,
+            .ic-sm {
+                fill: currentColor;
+            }
+
+            .skip {
+                position: absolute;
+                left: var(--s-200);
+                top: var(--s-200);
+                z-index: 100;
+                padding: var(--s-75) var(--s-100);
+                border-radius: var(--r-lg);
+                background: var(--text);
+                color: var(--bg);
+                transform: translateY(-200%);
+                transition: transform 300ms var(--ease);
+            }
+            .skip:focus {
+                transform: none;
+            }
+
+            :focus-visible {
+                outline: 2px solid var(--accent-text);
+                outline-offset: 2px;
+            }
+
+            /* Buttons */
+            .btn {
+                display: inline-flex;
+                align-items: center;
+                gap: var(--s-75);
+                padding: var(--s-75) var(--s-100);
+                border-radius: var(--r-lg);
+                border: 1px solid transparent;
+                cursor: pointer;
+                transition:
+                    background-color 300ms var(--ease),
+                    border-color 300ms var(--ease),
+                    transform 300ms var(--ease);
+            }
+            .btn:hover {
+                transform: translateY(-2px);
+            }
+            .btn:active {
+                transform: scale(0.98);
+            }
+            .btn-primary {
+                background: var(--accent);
+                color: #ffffff;
+            }
+            .btn-primary:hover {
+                background: var(--accent-hover);
+            }
+            .btn-large {
+                padding: var(--s-100) var(--s-300);
+            }
+            .btn-quiet {
+                background: var(--surface-2);
+                border-color: var(--line);
+                color: var(--text);
+            }
+            .btn-quiet:hover {
+                background: var(--surface-3);
+            }
+
+            /* Navigation: a floating bar sized to its content. */
+            .nav-shell {
+                position: fixed;
+                top: var(--s-200);
+                left: 0;
+                right: 0;
+                z-index: 50;
+                display: flex;
+                justify-content: center;
+                padding: 0 var(--s-200);
+                pointer-events: none;
+            }
+            .nav {
+                pointer-events: auto;
+                display: flex;
+                align-items: center;
+                gap: var(--s-75);
+                padding: var(--s-75);
+                border-radius: var(--r-2xl);
+                border: 1px solid var(--line);
+                background: rgba(24, 24, 24, 0.72);
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
+            }
+            .brand {
+                display: flex;
+                align-items: center;
+                gap: var(--s-75);
+                padding: 0 var(--s-75);
+            }
+            .brand img {
+                width: 24px;
+                height: 24px;
+            }
+            .nav-links {
+                display: flex;
+                gap: var(--s-25);
+            }
+            .nav-links a {
+                padding: var(--s-50) var(--s-100);
+                border-radius: var(--r-lg);
+                color: var(--muted);
+                transition:
+                    background-color 300ms var(--ease),
+                    color 300ms var(--ease);
+            }
+            .nav-links a:hover {
+                color: var(--text);
+                background: var(--surface-3);
+            }
+            .nav-links a[aria-current="true"] {
+                color: var(--text);
+                background: var(--surface-3);
+            }
+            .lang {
+                display: flex;
+                padding: var(--s-25);
+                border-radius: var(--r-lg);
+                background: var(--surface-2);
+            }
+            .lang button {
+                border: 0;
+                background: none;
+                color: var(--muted);
+                cursor: pointer;
+                padding: var(--s-25) var(--s-75);
+                border-radius: var(--r-md);
+                font-family: inherit;
+                transition:
+                    background-color 300ms var(--ease),
+                    color 300ms var(--ease);
+            }
+            .lang button:hover {
+                color: var(--text);
+            }
+            .lang button[aria-pressed="true"] {
+                background: var(--surface-3);
+                color: var(--text);
+            }
+            .menu-toggle {
+                display: none;
+                width: 40px;
+                height: 40px;
+                border: 0;
+                border-radius: var(--r-lg);
+                background: var(--surface-2);
+                cursor: pointer;
+                position: relative;
+            }
+            .menu-toggle span {
+                position: absolute;
+                left: var(--s-100);
+                right: var(--s-100);
+                height: 2px;
+                background: var(--text);
+                border-radius: 2px;
+                transition: transform 500ms var(--ease);
+            }
+            .menu-toggle span:first-child {
+                transform: translateY(-4px);
+            }
+            .menu-toggle span:last-child {
+                transform: translateY(4px);
+            }
+            .menu-open .menu-toggle span:first-child {
+                transform: rotate(45deg);
+            }
+            .menu-open .menu-toggle span:last-child {
+                transform: rotate(-45deg);
+            }
+
+            .mobile-menu {
+                position: fixed;
+                inset: 0;
+                z-index: 40;
+                background: rgba(0, 0, 0, 0.92);
+                backdrop-filter: blur(24px);
+                -webkit-backdrop-filter: blur(24px);
+                padding: 120px var(--s-300) var(--s-600);
+                display: flex;
+                flex-direction: column;
+                gap: var(--s-75);
+                opacity: 0;
+                visibility: hidden;
+                transition:
+                    opacity 500ms var(--ease),
+                    visibility 0s linear 500ms;
+            }
+            .menu-open .mobile-menu {
+                opacity: 1;
+                visibility: visible;
+                transition: opacity 500ms var(--ease);
+            }
+            .mobile-menu a {
+                padding: var(--s-100) 0;
+                opacity: 0;
+                transform: translateY(24px);
+                transition:
+                    opacity 500ms var(--ease),
+                    transform 500ms var(--ease);
+            }
+            .menu-open .mobile-menu a {
+                opacity: 1;
+                transform: none;
+            }
+
+            /* Sections */
+            main > section {
+                padding: var(--s-900) 0;
+            }
+            .section-head {
+                max-width: 680px;
+                margin-bottom: var(--s-600);
+                display: grid;
+                gap: var(--s-200);
+            }
+            .section-head.center {
+                margin-left: auto;
+                margin-right: auto;
+                text-align: center;
+            }
+
+            /* Hero */
+            .hero {
+                padding-top: 160px !important;
+                text-align: center;
+            }
+            .hero h1 {
+                max-width: 680px;
+                margin: var(--s-300) auto var(--s-300);
+                background: linear-gradient(90deg, #ffffff, #9b9b9b);
+                -webkit-background-clip: text;
+                background-clip: text;
+                color: transparent;
+            }
+            .hero .lead {
+                max-width: 680px;
+                margin: 0 auto var(--s-400);
+                color: var(--muted);
+            }
+            .cta-group {
+                display: grid;
+                justify-items: center;
+                gap: var(--s-100);
+            }
+            .cta-note {
+                color: var(--muted);
+            }
+
+            /* Launcher mock */
+            .mock {
+                max-width: 880px;
+                margin: var(--s-800) auto 0;
+                text-align: left;
+                display: grid;
+                grid-template-columns: 176px 1fr;
+                border-radius: var(--r-2xl);
+                border: 1px solid var(--line);
+                background: var(--surface);
+                overflow: hidden;
+            }
+            .mock-side {
+                background: var(--bg);
+                padding: var(--s-200) var(--s-75);
+                display: flex;
+                flex-direction: column;
+                gap: var(--s-50);
+                border: 0;
+            }
+            .mock-item {
+                display: flex;
+                align-items: center;
+                gap: var(--s-75);
+                padding: var(--s-75) var(--s-100);
+                border-radius: var(--r-lg);
+                color: var(--muted);
+            }
+            .mock-item.active {
+                background: var(--surface-3);
+                color: var(--text);
+            }
+            .mock-account {
+                margin-top: auto;
+                display: flex;
+                align-items: center;
+                gap: var(--s-75);
+                padding: var(--s-75) var(--s-100);
+            }
+            .mock-avatar {
+                width: 24px;
+                height: 24px;
+                border-radius: var(--r-md);
+                background: #4f7f34;
+            }
+            .mock-main {
+                padding: var(--s-200);
+                display: grid;
+                gap: var(--s-75);
+            }
+            .mock-card {
+                display: flex;
+                align-items: center;
+                gap: var(--s-100);
+                padding: var(--s-100);
+                border-radius: var(--r-lg);
+                background: var(--surface-2);
+            }
+            .mock-cover {
+                width: 40px;
+                height: 40px;
+                border-radius: var(--r-md);
+                flex: none;
+            }
+            .mock-text {
+                flex: 1;
+                min-width: 0;
+                display: grid;
+                gap: var(--s-25);
+            }
+            .mock-text > span {
+                color: var(--muted);
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .mock-play {
+                padding: var(--s-50) var(--s-100);
+                border-radius: var(--r-md);
+                background: var(--accent);
+                color: #fff;
+            }
+            .mock-play.quiet {
+                background: var(--surface-3);
+                color: var(--muted);
+            }
+            .mock-bar {
+                height: 4px;
+                border-radius: 2px;
+                background: var(--surface-3);
+                overflow: hidden;
+                margin-top: var(--s-50);
+            }
+            .mock-bar div {
+                height: 100%;
+                background: var(--accent);
+                transform-origin: left;
+                animation: load 3200ms var(--ease) infinite;
+            }
+            @keyframes load {
+                0% {
+                    transform: scaleX(0.2);
+                }
+                70%,
+                100% {
+                    transform: scaleX(0.86);
+                }
+            }
+
+            /* Benefits */
+            .benefits {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: var(--s-200);
+            }
+            .benefit {
+                padding: var(--s-300);
+                border-radius: var(--r-2xl);
+                background: var(--surface);
+                border: 1px solid var(--line);
+                display: grid;
+                gap: var(--s-100);
+                align-content: start;
+            }
+            .benefit .badge {
+                width: 40px;
+                height: 40px;
+                border-radius: var(--r-lg);
+                display: grid;
+                place-items: center;
+                background: var(--surface-3);
+                color: var(--accent-text);
+                margin-bottom: var(--s-75);
+            }
+
+            /* Tagline reveal */
+            .tagline {
+                text-align: center;
+            }
+            .tagline p {
+                max-width: 880px;
+                margin: 0 auto;
+            }
+            .tagline .word {
+                display: inline-block;
+                opacity: 0.3;
+                transition: opacity 500ms var(--ease);
+            }
+            .tagline .word.on {
+                opacity: 1;
+            }
+
+            /* Steps */
+            .steps {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: var(--s-200);
+                counter-reset: step;
+            }
+            .step {
+                padding: var(--s-300);
+                border-radius: var(--r-2xl);
+                background: var(--surface);
+                border: 1px solid var(--line);
+                display: grid;
+                gap: var(--s-100);
+                align-content: start;
+            }
+            .step-num {
+                width: 32px;
+                height: 32px;
+                border-radius: var(--r-lg);
+                display: grid;
+                place-items: center;
+                background: var(--accent);
+                color: #fff;
+                margin-bottom: var(--s-75);
+            }
+
+            /* Trust */
+            .trust {
+                display: grid;
+                grid-template-columns: 1fr;
+                gap: var(--s-200);
+            }
+            .trust-item {
+                display: flex;
+                gap: var(--s-200);
+                padding: var(--s-300);
+                border-radius: var(--r-2xl);
+                background: var(--surface);
+                border: 1px solid var(--line);
+            }
+            .trust-item .ic {
+                color: var(--accent-text);
+                margin-top: var(--s-25);
+            }
+            .trust-item div {
+                display: grid;
+                gap: var(--s-50);
+            }
+            .trust-item a {
+                color: var(--accent-text);
+            }
+            .trust-item a:hover {
+                text-decoration: underline;
+            }
+
+            /* Download */
+            .release-line {
+                min-height: 24px;
+                color: var(--muted);
+            }
+            .release-line b {
+                color: var(--text);
+                font-weight: 600;
+            }
+            .release-line.error {
+                color: #f0a35e;
+            }
+            .platforms {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: var(--s-200);
+            }
+            .platform {
+                padding: var(--s-300);
+                border-radius: var(--r-2xl);
+                background: var(--surface);
+                border: 1px solid var(--line);
+                transition: border-color 300ms var(--ease);
+            }
+            .platform.current {
+                border-color: var(--accent);
+            }
+            .platform-head {
+                display: flex;
+                align-items: center;
+                gap: var(--s-100);
+                margin-bottom: var(--s-300);
+            }
+            .platform-head .ic {
+                width: 24px;
+                height: 24px;
+            }
+            .platform-head .tag {
+                margin-left: auto;
+                padding: var(--s-25) var(--s-75);
+                border-radius: var(--r-md);
+                background: var(--accent);
+                color: #fff;
+                display: none;
+            }
+            .platform.current .tag {
+                display: inline-block;
+            }
+            .files {
+                display: grid;
+                gap: var(--s-75);
+            }
+            .file {
+                display: flex;
+                align-items: center;
+                gap: var(--s-100);
+                padding: var(--s-100);
+                border-radius: var(--r-lg);
+                background: var(--surface-2);
+                border: 1px solid var(--line);
+                transition:
+                    background-color 300ms var(--ease),
+                    border-color 300ms var(--ease),
+                    transform 300ms var(--ease);
+            }
+            .file:hover {
+                background: var(--surface-3);
+                transform: translateY(-2px);
+            }
+            .file:active {
+                transform: scale(0.98);
+            }
+            .file-text {
+                flex: 1;
+                min-width: 0;
+                display: grid;
+            }
+            .file-meta {
+                padding: var(--s-25) var(--s-75);
+                border-radius: var(--r-sm);
+                background: var(--surface-3);
+                color: var(--muted);
+                white-space: nowrap;
+                min-width: 64px;
+                text-align: center;
+            }
+            .file-meta.loading {
+                color: transparent;
+                animation: pulse 1400ms var(--ease) infinite alternate;
+            }
+            @keyframes pulse {
+                from {
+                    opacity: 0.4;
+                }
+                to {
+                    opacity: 1;
+                }
+            }
+            .file .ic-sm {
+                color: var(--muted);
+            }
+            .download-foot {
+                margin-top: var(--s-300);
+            }
+            .download-foot a {
+                color: var(--accent-text);
+            }
+            .download-foot a:hover {
+                text-decoration: underline;
+            }
+
+            /* FAQ */
+            .faq {
+                display: grid;
+                gap: var(--s-75);
+                max-width: 880px;
+            }
+            details {
+                border-radius: var(--r-xl);
+                background: var(--surface);
+                border: 1px solid var(--line);
+            }
+            summary {
+                cursor: pointer;
+                list-style: none;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: var(--s-200);
+                padding: var(--s-200) var(--s-300);
+                border-radius: var(--r-xl);
+                transition: background-color 300ms var(--ease);
+            }
+            summary:hover {
+                background: var(--surface-2);
+            }
+            summary::-webkit-details-marker {
+                display: none;
+            }
+            summary .ic {
+                color: var(--muted);
+                transition: transform 500ms var(--ease);
+            }
+            details[open] summary .ic {
+                transform: rotate(180deg);
+            }
+            details p {
+                padding: 0 var(--s-300) var(--s-300);
+                color: var(--muted);
+            }
+
+            /* Final call to action */
+            .final {
+                text-align: center;
+            }
+            .final .section-head {
+                margin-bottom: var(--s-400);
+            }
+
+            footer {
+                padding: var(--s-600) 0;
+            }
+            .foot {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: var(--s-300);
+                border-radius: var(--r-2xl);
+                background: var(--surface);
+                border: 1px solid var(--line);
+                padding: var(--s-300);
+            }
+            .foot-links {
+                margin-left: auto;
+                display: flex;
+                flex-wrap: wrap;
+                gap: var(--s-200);
+            }
+            .foot-links a {
+                color: var(--muted);
+                transition: color 300ms var(--ease);
+            }
+            .foot-links a:hover {
+                color: var(--text);
+            }
+
+            /* Scroll reveals, only when scripts run. */
+            .js .reveal {
+                opacity: 0;
+                transform: translateY(32px);
+                transition:
+                    opacity 700ms var(--ease),
+                    transform 700ms var(--ease);
+            }
+            .js .reveal.in {
+                opacity: 1;
+                transform: none;
+            }
+
+            @media (max-width: 1024px) {
+                .nav-links,
+                .nav > .lang {
+                    display: none;
+                }
+                .menu-toggle {
+                    display: block;
+                }
+                .steps {
+                    grid-template-columns: 1fr;
+                }
+            }
+            @media (max-width: 768px) {
+                .wrap {
+                    padding: 0 var(--s-200);
+                }
+                main > section {
+                    padding: var(--s-700) 0;
+                }
+                .hero {
+                    padding-top: 128px !important;
+                }
+                .heading-1 {
+                    font-size: 36px;
+                    line-height: 40px;
+                }
+                .heading-2 {
+                    font-size: 30px;
+                    line-height: 36px;
+                }
+                .heading-3 {
+                    font-size: 24px;
+                    line-height: 32px;
+                }
+                .nav {
+                    width: 100%;
+                    justify-content: space-between;
+                }
+                .mock {
+                    grid-template-columns: 1fr;
+                    margin-top: var(--s-600);
+                }
+                .mock-side {
+                    display: none;
+                }
+                .benefits,
+                .platforms {
+                    grid-template-columns: 1fr;
+                }
+                .foot-links {
+                    margin-left: 0;
+                }
+            }
+            @media (min-width: 1025px) {
+                .mobile-menu {
+                    display: none;
+                }
+            }
+
+            @media (prefers-reduced-motion: reduce) {
+                html {
+                    scroll-behavior: auto;
+                }
+                *,
+                *::before,
+                *::after {
+                    animation: none !important;
+                }
+                .btn:hover,
+                .file:hover,
+                .btn:active,
+                .file:active {
+                    transform: none;
+                }
+                .js .reveal {
+                    transform: none;
+                    transition: opacity 700ms var(--ease);
+                }
+                .mobile-menu a {
+                    transform: none;
+                }
+                .tagline .word {
+                    opacity: 1;
+                    transition: none;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <a class="skip button-sm" href="#main"
+            ><span lang="ru">Перейти к содержанию</span
+            ><span lang="en">Skip to content</span></a
+        >
+
+        <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+            <symbol id="i-arrow-up-right" viewBox="0 0 256 256">
+                <path
+                    d="M200,64V168a8,8,0,0,1-16,0V83.31L69.66,197.66a8,8,0,0,1-11.32-11.32L172.69,72H88a8,8,0,0,1,0-16H192A8,8,0,0,1,200,64Z"
+                />
+            </symbol>
+            <symbol id="i-caret-down" viewBox="0 0 256 256">
+                <path
+                    d="M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z"
+                />
+            </symbol>
+            <symbol id="i-clock" viewBox="0 0 256 256">
+                <path
+                    d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm64-88a8,8,0,0,1-8,8H128a8,8,0,0,1-8-8V72a8,8,0,0,1,16,0v48h48A8,8,0,0,1,192,128Z"
+                />
+            </symbol>
+            <symbol id="i-coffee" viewBox="0 0 256 256">
+                <path
+                    d="M80,56V24a8,8,0,0,1,16,0V56a8,8,0,0,1-16,0Zm40,8a8,8,0,0,0,8-8V24a8,8,0,0,0-16,0V56A8,8,0,0,0,120,64Zm32,0a8,8,0,0,0,8-8V24a8,8,0,0,0-16,0V56A8,8,0,0,0,152,64Zm96,56v8a40,40,0,0,1-37.51,39.91,96.59,96.59,0,0,1-27,40.09H208a8,8,0,0,1,0,16H32a8,8,0,0,1,0-16H56.54A96.3,96.3,0,0,1,24,136V88a8,8,0,0,1,8-8H208A40,40,0,0,1,248,120ZM200,96H40v40a80.27,80.27,0,0,0,45.12,72h69.76A80.27,80.27,0,0,0,200,136Zm32,24a24,24,0,0,0-16-22.62V136a95.78,95.78,0,0,1-1.2,15A24,24,0,0,0,232,128Z"
+                />
+            </symbol>
+            <symbol id="i-cube" viewBox="0 0 256 256">
+                <path
+                    d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"
+                />
+            </symbol>
+            <symbol id="i-cursor-click" viewBox="0 0 256 256">
+                <path
+                    d="M88,24V16a8,8,0,0,1,16,0v8a8,8,0,0,1-16,0ZM16,104h8a8,8,0,0,0,0-16H16a8,8,0,0,0,0,16ZM124.42,39.16a8,8,0,0,0,10.74-3.58l8-16a8,8,0,0,0-14.31-7.16l-8,16A8,8,0,0,0,124.42,39.16Zm-96,81.69-16,8a8,8,0,0,0,7.16,14.31l16-8a8,8,0,1,0-7.16-14.31ZM219.31,184a16,16,0,0,1,0,22.63l-12.68,12.68a16,16,0,0,1-22.63,0L132.7,168,115,214.09c0,.1-.08.21-.13.32a15.83,15.83,0,0,1-14.6,9.59l-.79,0a15.83,15.83,0,0,1-14.41-11L32.8,52.92A16,16,0,0,1,52.92,32.8L213,85.07a16,16,0,0,1,1.41,29.8l-.32.13L168,132.69ZM208,195.31,156.69,144h0a16,16,0,0,1,4.93-26l.32-.14,45.95-17.64L48,48l52.2,159.86,17.65-46c0-.11.08-.22.13-.33a16,16,0,0,1,11.69-9.34,16.72,16.72,0,0,1,3-.28,16,16,0,0,1,11.3,4.69L195.31,208Z"
+                />
+            </symbol>
+            <symbol id="i-download-simple" viewBox="0 0 256 256">
+                <path
+                    d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z"
+                />
+            </symbol>
+            <symbol id="i-github-logo" viewBox="0 0 256 256">
+                <path
+                    d="M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z"
+                />
+            </symbol>
+            <symbol id="i-hard-drives" viewBox="0 0 256 256">
+                <path
+                    d="M208,136H48a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V152A16,16,0,0,0,208,136Zm0,64H48V152H208v48Zm0-160H48A16,16,0,0,0,32,56v48a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V56A16,16,0,0,0,208,40Zm0,64H48V56H208v48ZM192,80a12,12,0,1,1-12-12A12,12,0,0,1,192,80Zm0,96a12,12,0,1,1-12-12A12,12,0,0,1,192,176Z"
+                />
+            </symbol>
+            <symbol id="i-lightning" viewBox="0 0 256 256">
+                <path
+                    d="M215.79,118.17a8,8,0,0,0-5-5.66L153.18,90.9l14.66-73.33a8,8,0,0,0-13.69-7l-112,120a8,8,0,0,0,3,13l57.63,21.61L88.16,238.43a8,8,0,0,0,13.69,7l112-120A8,8,0,0,0,215.79,118.17ZM109.37,214l10.47-52.38a8,8,0,0,0-5-9.06L62,132.71l84.62-90.66L136.16,94.43a8,8,0,0,0,5,9.06l52.8,19.8Z"
+                />
+            </symbol>
+            <symbol id="i-linux-logo" viewBox="0 0 256 256">
+                <path
+                    d="M229,214.25A8,8,0,0,1,217.76,213C216.39,211.27,184,169.86,184,88A56,56,0,0,0,72,88c0,81.86-32.37,123.27-33.75,125a8,8,0,0,1-12.51-10c.15-.2,7.69-9.9,15.13-28.74C47.77,156.8,56,127.64,56,88a72,72,0,0,1,144,0c0,39.64,8.23,68.8,15.13,86.28,7.48,18.94,15.06,28.64,15.14,28.74A8,8,0,0,1,229,214.25ZM100,88a12,12,0,1,0,12,12A12,12,0,0,0,100,88Zm68,12a12,12,0,1,0-12,12A12,12,0,0,0,168,100ZM99.58,128.84a8,8,0,0,0-7.15,14.31l32,16a7.94,7.94,0,0,0,7.15,0l32-16a8,8,0,0,0-7.16-14.31L128,143.05ZM128,176a54.07,54.07,0,0,0-47,28.11,8,8,0,1,0,14,7.78,37.35,37.35,0,0,1,66,0,8,8,0,0,0,14-7.78A54.07,54.07,0,0,0,128,176Z"
+                />
+            </symbol>
+            <symbol id="i-list" viewBox="0 0 256 256">
+                <path
+                    d="M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128ZM40,72H216a8,8,0,0,0,0-16H40a8,8,0,0,0,0,16ZM216,184H40a8,8,0,0,0,0,16H216a8,8,0,0,0,0-16Z"
+                />
+            </symbol>
+            <symbol id="i-package" viewBox="0 0 256 256">
+                <path
+                    d="M223.68,66.15,135.68,18a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32l80.34,44-29.77,16.3-80.35-44ZM128,120,47.66,76l33.9-18.56,80.34,44ZM40,90l80,43.78v85.79L40,175.82Zm176,85.78h0l-80,43.79V133.82l32-17.51V152a8,8,0,0,0,16,0V107.55L216,90v85.77Z"
+                />
+            </symbol>
+            <symbol id="i-shield-check" viewBox="0 0 256 256">
+                <path
+                    d="M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm0,72c0,37.07-13.66,67.16-40.6,89.42A129.3,129.3,0,0,1,128,223.62a128.25,128.25,0,0,1-38.92-21.81C61.82,179.51,48,149.3,48,112l0-56,160,0ZM82.34,141.66a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32l-56,56a8,8,0,0,1-11.32,0Z"
+                />
+            </symbol>
+            <symbol id="i-stack" viewBox="0 0 256 256">
+                <path
+                    d="M230.91,172A8,8,0,0,1,228,182.91l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,36,169.09l92,53.65,92-53.65A8,8,0,0,1,230.91,172ZM220,121.09l-92,53.65L36,121.09A8,8,0,0,0,28,134.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,121.09ZM24,80a8,8,0,0,1,4-6.91l96-56a8,8,0,0,1,8.06,0l96,56a8,8,0,0,1,0,13.82l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,24,80Zm23.88,0L128,126.74,208.12,80,128,33.26Z"
+                />
+            </symbol>
+            <symbol id="i-user-circle" viewBox="0 0 256 256">
+                <path
+                    d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24ZM74.08,197.5a64,64,0,0,1,107.84,0,87.83,87.83,0,0,1-107.84,0ZM96,120a32,32,0,1,1,32,32A32,32,0,0,1,96,120Zm97.76,66.41a79.66,79.66,0,0,0-36.06-28.75,48,48,0,1,0-59.4,0,79.66,79.66,0,0,0-36.06,28.75,88,88,0,1,1,131.52,0Z"
+                />
+            </symbol>
+            <symbol id="i-windows-logo" viewBox="0 0 256 256">
+                <path
+                    d="M208,136H128a8,8,0,0,0-8,8v57.45a8,8,0,0,0,6.57,7.88l80,14.54A7.61,7.61,0,0,0,208,224a8,8,0,0,0,8-8V144A8,8,0,0,0,208,136Zm-8,70.41-64-11.63V152h64ZM96,136H32a8,8,0,0,0-8,8v40a8,8,0,0,0,6.57,7.87l64,11.64a8.54,8.54,0,0,0,1.43.13,8,8,0,0,0,8-8V144A8,8,0,0,0,96,136Zm-8,50.05-48-8.73V152H88ZM213.13,33.86a8,8,0,0,0-6.56-1.73l-80,14.55A8,8,0,0,0,120,54.55V112a8,8,0,0,0,8,8h80a8,8,0,0,0,8-8V40A8,8,0,0,0,213.13,33.86ZM200,104H136V61.22l64-11.63ZM101.13,54.22a8,8,0,0,0-6.56-1.73l-64,11.64A8,8,0,0,0,24,72v40a8,8,0,0,0,8,8H96a8,8,0,0,0,8-8V60.36A8,8,0,0,0,101.13,54.22ZM88,104H40V78.68L88,70Z"
+                />
+            </symbol>
+            <symbol id="i-x" viewBox="0 0 256 256">
+                <path
+                    d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"
+                />
+            </symbol>
+        </svg>
+
+        <div class="nav-shell">
+            <nav class="nav" aria-label="Главное меню">
+                <a class="brand heading-6" href="#top"
+                    ><img
+                        src="logo.svg"
+                        alt=""
+                        width="24"
+                        height="24"
+                    />OrbMC</a
+                >
+                <div class="nav-links title-4">
+                    <a href="#features"
+                        ><span lang="ru">Возможности</span
+                        ><span lang="en">Features</span></a
+                    >
+                    <a href="#how"
+                        ><span lang="ru">Как это работает</span
+                        ><span lang="en">How it works</span></a
+                    >
+                    <a href="#download"
+                        ><span lang="ru">Скачать</span
+                        ><span lang="en">Download</span></a
+                    >
+                    <a href="#faq"
+                        ><span lang="ru">Вопросы</span
+                        ><span lang="en">FAQ</span></a
+                    >
+                    <a
+                        href="https://github.com/Incoderr/OrbMC"
+                        target="_blank"
+                        rel="noopener"
+                        >GitHub</a
+                    >
+                </div>
+                <div
+                    class="lang button-sm"
+                    role="group"
+                    aria-label="Язык / Language"
+                >
+                    <button type="button" data-lang="ru" aria-pressed="true">
+                        RU
+                    </button>
+                    <button type="button" data-lang="en" aria-pressed="false">
+                        EN
+                    </button>
+                </div>
+                <button
+                    class="menu-toggle"
+                    type="button"
+                    aria-expanded="false"
+                    aria-controls="mobile-menu"
+                    aria-label="Меню"
+                >
+                    <span></span><span></span>
+                </button>
+            </nav>
+        </div>
+
+        <div class="mobile-menu heading-4" id="mobile-menu">
+            <a href="#features"
+                ><span lang="ru">Возможности</span
+                ><span lang="en">Features</span></a
+            >
+            <a href="#how"
+                ><span lang="ru">Как это работает</span
+                ><span lang="en">How it works</span></a
+            >
+            <a href="#download"
+                ><span lang="ru">Скачать</span
+                ><span lang="en">Download</span></a
+            >
+            <a href="#faq"
+                ><span lang="ru">Вопросы</span><span lang="en">FAQ</span></a
+            >
+            <a
+                href="https://github.com/Incoderr/OrbMC"
+                target="_blank"
+                rel="noopener"
+                >GitHub</a
+            >
+            <div
+                class="lang button-sm"
+                role="group"
+                aria-label="Язык / Language"
+                style="
+                    display: flex;
+                    align-self: flex-start;
+                    margin-top: var(--s-300);
+                "
+            >
+                <button type="button" data-lang="ru" aria-pressed="true">
+                    RU
+                </button>
+                <button type="button" data-lang="en" aria-pressed="false">
+                    EN
+                </button>
+            </div>
+        </div>
+
+        <main id="main">
+            <section class="hero" id="top">
+                <div class="wrap">
+                    <h1 class="heading-1">
+                        <span lang="ru"
+                            >Нативный, легкий и быстрый<br />Minecraft лаунчер,
+                            написанный на чистом Rust</span
+                        >
+                        <span lang="en"
+                            >A native, lightweight and fast<br />Minecraft
+                            launcher written in pure Rust</span
+                        >
+                    </h1>
+                    <p class="lead title-2">
+                        <span lang="ru"
+                            >OrbMC устанавливает загрузчик, моды из каталога
+                            Modrinth и подходящую версию Java для каждой
+                            сборки.</span
+                        >
+                        <span lang="en"
+                            >OrbMC installs the mod loader, mods from the
+                            Modrinth catalog and the matching Java version for
+                            every build.</span
+                        >
+                    </p>
+                    <div class="cta-group">
+                        <a
+                            class="btn btn-primary btn-large button-md"
+                            data-cta
+                            href="#download"
+                        >
+                            <svg class="ic">
+                                <use href="#i-download-simple" />
+                            </svg>
+                            <span data-cta-label
+                                ><span lang="ru">Скачать OrbMC</span
+                                ><span lang="en">Download OrbMC</span></span
+                            >
+                        </a>
+                        <span class="cta-note caption-2"
+                            ><span lang="ru"
+                                >Бесплатно. Windows 10, 11 и Linux.</span
+                            ><span lang="en"
+                                >Free. Windows 10, 11 and Linux.</span
+                            ></span
+                        >
+                    </div>
+
+                    <div class="mock reveal" aria-hidden="true">
+                        <div class="mock-side title-4">
+                            <div class="mock-item active">
+                                <svg class="ic-sm"><use href="#i-stack" /></svg
+                                ><span lang="ru">Сборки</span
+                                ><span lang="en">Builds</span>
+                            </div>
+                            <div class="mock-item">
+                                <svg class="ic-sm">
+                                    <use href="#i-package" /></svg
+                                ><span lang="ru">Каталог</span
+                                ><span lang="en">Catalog</span>
+                            </div>
+                            <div class="mock-item">
+                                <svg class="ic-sm">
+                                    <use href="#i-user-circle" /></svg
+                                ><span lang="ru">Скины</span
+                                ><span lang="en">Skins</span>
+                            </div>
+                            <div class="mock-account caption-3">
+                                <div class="mock-avatar"></div>
+                                Steve
+                            </div>
+                        </div>
+                        <div class="mock-main">
+                            <div class="mock-card">
+                                <div
+                                    class="mock-cover"
+                                    style="background: #7b61f0"
+                                ></div>
+                                <div class="mock-text">
+                                    <b class="title-4">Survival+</b
+                                    ><span class="caption-5"
+                                        >Minecraft 1.21.1 · Fabric 0.16 ·
+                                        <span lang="ru">12 ч 40 мин</span
+                                        ><span lang="en"
+                                            >12 h 40 min</span
+                                        ></span
+                                    >
+                                </div>
+                                <div class="mock-play button-sm">
+                                    <span lang="ru">Играть</span
+                                    ><span lang="en">Play</span>
+                                </div>
+                            </div>
+                            <div class="mock-card">
+                                <div
+                                    class="mock-cover"
+                                    style="background: #b8569f"
+                                ></div>
+                                <div class="mock-text">
+                                    <b class="title-4"
+                                        >Create: Above and Beyond</b
+                                    ><span class="caption-5"
+                                        >Minecraft 1.20.1 · Forge 47.3 ·
+                                        <span lang="ru">3 ч 5 мин</span
+                                        ><span lang="en">3 h 5 min</span></span
+                                    >
+                                </div>
+                                <div class="mock-play button-sm">
+                                    <span lang="ru">Играть</span
+                                    ><span lang="en">Play</span>
+                                </div>
+                            </div>
+                            <div class="mock-card">
+                                <div
+                                    class="mock-cover"
+                                    style="background: #3e9c72"
+                                ></div>
+                                <div class="mock-text">
+                                    <b class="title-4">Shaders and Chill</b
+                                    ><span class="caption-5"
+                                        ><span lang="ru"
+                                            >Скачивание ресурсов игры</span
+                                        ><span lang="en"
+                                            >Downloading game assets</span
+                                        >
+                                        · 18.4 MiB/s</span
+                                    >
+                                    <div class="mock-bar"><div></div></div>
+                                </div>
+                                <div class="mock-play quiet button-sm">
+                                    <span lang="ru">Пауза</span
+                                    ><span lang="en">Pause</span>
+                                </div>
+                            </div>
+                            <div class="mock-card">
+                                <div
+                                    class="mock-cover"
+                                    style="background: #c98a3a"
+                                ></div>
+                                <div class="mock-text">
+                                    <b class="title-4">Vanilla 1.21.4</b
+                                    ><span class="caption-5"
+                                        >Minecraft 1.21.4 · Vanilla ·
+                                        <span lang="ru">Ещё не запускалась</span
+                                        ><span lang="en"
+                                            >Not played yet</span
+                                        ></span
+                                    >
+                                </div>
+                                <div class="mock-play button-sm">
+                                    <span lang="ru">Играть</span
+                                    ><span lang="en">Play</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="features">
+                <div class="wrap">
+                    <div class="section-head reveal">
+                        <h2 class="heading-2">
+                            <span lang="ru">Возможности</span
+                            ><span lang="en">Features</span>
+                        </h2>
+                    </div>
+                    <div class="benefits">
+                        <article class="benefit reveal">
+                            <div class="badge">
+                                <svg class="ic"><use href="#i-package" /></svg>
+                            </div>
+                            <h3 class="heading-6">
+                                <span lang="ru">Каталог Modrinth</span
+                                ><span lang="en">Modrinth catalog</span>
+                            </h3>
+                            <p class="body-3 muted">
+                                <span lang="ru"
+                                    >Моды, модпаки, текстурпаки и шейдеры
+                                    устанавливаются из лаунчера.</span
+                                ><span lang="en"
+                                    >Mods, modpacks, texture packs and shaders
+                                    install from the launcher.</span
+                                >
+                            </p>
+                        </article>
+
+                        <article class="benefit reveal">
+                            <div class="badge">
+                                <svg class="ic">
+                                    <use href="#i-user-circle" />
+                                </svg>
+                            </div>
+                            <h3 class="heading-6">
+                                <span lang="ru">Аккаунт Ely.by</span
+                                ><span lang="en">Ely.by account</span>
+                            </h3>
+                            <p class="body-3 muted">
+                                <span lang="ru"
+                                    >После входа через Ely.by ваш скин
+                                    отображается в игре. Для игры без аккаунта
+                                    достаточно ника.</span
+                                ><span lang="en"
+                                    >After signing in with Ely.by, your skin is
+                                    shown in game. Playing without an account
+                                    only takes a name.</span
+                                >
+                            </p>
+                        </article>
+                    </div>
+                </div>
+            </section>
+
+            <section class="tagline">
+                <div class="wrap">
+                    <p class="heading-2" data-words>
+                        <span lang="ru"
+                            >Выберите версию игры и загрузчик.<br />Остальное
+                            OrbMC подготовит к запуску.</span
+                        >
+                        <span lang="en"
+                            >Choose a game version and a loader.<br />OrbMC
+                            prepares the rest for launch.</span
+                        >
+                    </p>
+                </div>
+            </section>
+
+            <section id="how">
+                <div class="wrap">
+                    <div class="section-head reveal">
+                        <h2 class="heading-2">
+                            <span lang="ru">Как начать</span
+                            ><span lang="en">How to start</span>
+                        </h2>
+                    </div>
+                    <ol class="steps">
+                        <li class="step reveal">
+                            <span class="step-num button-sm">1</span>
+                            <h3 class="heading-6">
+                                <span lang="ru">Установите OrbMC</span
+                                ><span lang="en">Install OrbMC</span>
+                            </h3>
+                            <p class="body-3 muted">
+                                <span lang="ru"
+                                    >Установщик для Windows не требует прав
+                                    администратора. Для Linux доступны пакеты
+                                    .deb, .rpm и AppImage.</span
+                                ><span lang="en"
+                                    >The Windows installer does not require
+                                    admin rights. For Linux, .deb, .rpm and
+                                    AppImage packages are available.</span
+                                >
+                            </p>
+                        </li>
+                        <li class="step reveal">
+                            <span class="step-num button-sm">2</span>
+                            <h3 class="heading-6">
+                                <span lang="ru">Создайте сборку</span
+                                ><span lang="en">Create a build</span>
+                            </h3>
+                            <p class="body-3 muted">
+                                <span lang="ru"
+                                    >Выберите версию Minecraft и загрузчик или
+                                    установите модпак из каталога.</span
+                                ><span lang="en"
+                                    >Choose a Minecraft version and a loader, or
+                                    install a modpack from the catalog.</span
+                                >
+                            </p>
+                        </li>
+                        <li class="step reveal">
+                            <span class="step-num button-sm">3</span>
+                            <h3 class="heading-6">
+                                <span lang="ru">Запустите игру</span
+                                ><span lang="en">Launch the game</span>
+                            </h3>
+                            <p class="body-3 muted">
+                                <span lang="ru"
+                                    >Добавьте моды из каталога и нажмите
+                                    «Играть». Java загрузится перед первым
+                                    запуском.</span
+                                ><span lang="en"
+                                    >Add mods from the catalog and press Play.
+                                    Java downloads before the first
+                                    launch.</span
+                                >
+                            </p>
+                        </li>
+                    </ol>
+                </div>
+            </section>
+
+            <section>
+                <div class="wrap">
+                    <div class="section-head reveal">
+                        <h2 class="heading-2">
+                            <span lang="ru">Бесплатно и с открытым кодом</span
+                            ><span lang="en">Free and open source</span>
+                        </h2>
+                    </div>
+                    <div class="trust">
+                        <div class="trust-item reveal">
+                            <svg class="ic"><use href="#i-github-logo" /></svg>
+                            <div>
+                                <h3 class="title-3">
+                                    <span lang="ru">Открытый код</span
+                                    ><span lang="en">Open source</span>
+                                </h3>
+                                <p class="body-6 muted">
+                                    <span lang="ru"
+                                        >Исходный код опубликован на
+                                        <a
+                                            href="https://github.com/Incoderr/OrbMC"
+                                            target="_blank"
+                                            rel="noopener"
+                                            >GitHub</a
+                                        >
+                                        под лицензией GPL 3.0.</span
+                                    ><span lang="en"
+                                        >The source code is published on
+                                        <a
+                                            href="https://github.com/Incoderr/OrbMC"
+                                            target="_blank"
+                                            rel="noopener"
+                                            >GitHub</a
+                                        >
+                                        under GPL 3.0.</span
+                                    >
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="download">
+                <div class="wrap">
+                    <div class="section-head reveal">
+                        <h2 class="heading-2">
+                            <span lang="ru">Скачать OrbMC</span
+                            ><span lang="en">Download OrbMC</span>
+                        </h2>
+                        <p
+                            class="release-line body-3"
+                            id="release-line"
+                            aria-live="polite"
+                        >
+                            <span lang="ru"
+                                >Загрузка сведений о последней версии…</span
+                            ><span lang="en">Loading the latest version…</span>
+                        </p>
+                    </div>
+
+                    <div class="platforms">
+                        <div class="platform reveal" data-os="windows">
+                            <div class="platform-head">
+                                <svg class="ic">
+                                    <use href="#i-windows-logo" />
+                                </svg>
+                                <h3 class="heading-6">Windows</h3>
+                                <span class="tag caption-3"
+                                    ><span lang="ru">Ваша система</span
+                                    ><span lang="en">Your system</span></span
+                                >
+                            </div>
+                            <div class="files">
+                                <a
+                                    class="file"
+                                    data-asset="-windows-x64-setup.exe"
+                                    data-main
+                                >
+                                    <span class="file-text"
+                                        ><b class="title-3"
+                                            ><span lang="ru">Установщик</span
+                                            ><span lang="en">Installer</span></b
+                                        ><span class="caption-2 muted"
+                                            ><span lang="ru"
+                                                >Windows 10 и 11, x64.</span
+                                            ><span lang="en"
+                                                >Windows 10 and 11, x64.</span
+                                            ></span
+                                        ></span
+                                    >
+                                    <span
+                                        class="file-meta caption-5 mono loading"
+                                        >.exe</span
+                                    >
+                                    <svg class="ic-sm">
+                                        <use href="#i-download-simple" />
+                                    </svg>
+                                </a>
+                                <a
+                                    class="file"
+                                    data-asset="-windows-x64-portable.zip"
+                                >
+                                    <span class="file-text"
+                                        ><b class="title-3">Portable</b
+                                        ><span class="caption-2 muted"
+                                            ><span lang="ru"
+                                                >Запускается без
+                                                установки.</span
+                                            ><span lang="en"
+                                                >Runs without installing.</span
+                                            ></span
+                                        ></span
+                                    >
+                                    <span
+                                        class="file-meta caption-5 mono loading"
+                                        >.zip</span
+                                    >
+                                    <svg class="ic-sm">
+                                        <use href="#i-download-simple" />
+                                    </svg>
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="platform reveal" data-os="linux">
+                            <div class="platform-head">
+                                <svg class="ic">
+                                    <use href="#i-linux-logo" />
+                                </svg>
+                                <h3 class="heading-6">Linux</h3>
+                                <span class="tag caption-3"
+                                    ><span lang="ru">Ваша система</span
+                                    ><span lang="en">Your system</span></span
+                                >
+                            </div>
+                            <div class="files">
+                                <a
+                                    class="file"
+                                    data-asset="-linux-x86_64.AppImage"
+                                    data-main
+                                >
+                                    <span class="file-text"
+                                        ><b class="title-3">AppImage</b
+                                        ><span class="caption-2 muted"
+                                            ><span lang="ru"
+                                                >Для любого дистрибутива, без
+                                                установки.</span
+                                            ><span lang="en"
+                                                >For any distribution, no
+                                                install.</span
+                                            ></span
+                                        ></span
+                                    >
+                                    <span
+                                        class="file-meta caption-5 mono loading"
+                                        >.AppImage</span
+                                    >
+                                    <svg class="ic-sm">
+                                        <use href="#i-download-simple" />
+                                    </svg>
+                                </a>
+                                <a class="file" data-asset="-linux-x86_64.deb">
+                                    <span class="file-text"
+                                        ><b class="title-3"
+                                            >Debian, Ubuntu, Mint</b
+                                        ><span class="caption-2 muted"
+                                            ><span lang="ru"
+                                                >Пакет для apt.</span
+                                            ><span lang="en"
+                                                >Package for apt.</span
+                                            ></span
+                                        ></span
+                                    >
+                                    <span
+                                        class="file-meta caption-5 mono loading"
+                                        >.deb</span
+                                    >
+                                    <svg class="ic-sm">
+                                        <use href="#i-download-simple" />
+                                    </svg>
+                                </a>
+                                <a class="file" data-asset="-linux-x86_64.rpm">
+                                    <span class="file-text"
+                                        ><b class="title-3">Fedora, openSUSE</b
+                                        ><span class="caption-2 muted"
+                                            ><span lang="ru"
+                                                >Пакет для dnf и zypper.</span
+                                            ><span lang="en"
+                                                >Package for dnf and
+                                                zypper.</span
+                                            ></span
+                                        ></span
+                                    >
+                                    <span
+                                        class="file-meta caption-5 mono loading"
+                                        >.rpm</span
+                                    >
+                                    <svg class="ic-sm">
+                                        <use href="#i-download-simple" />
+                                    </svg>
+                                </a>
+                                <a
+                                    class="file"
+                                    data-asset="-linux-x86_64.tar.gz"
+                                >
+                                    <span class="file-text"
+                                        ><b class="title-3"
+                                            ><span lang="ru">Архив</span
+                                            ><span lang="en">Archive</span></b
+                                        ><span class="caption-2 muted"
+                                            ><span lang="ru"
+                                                >Исполняемый файл, иконка
+                                                и ярлык .desktop.</span
+                                            ><span lang="en"
+                                                >Executable, icon and .desktop
+                                                entry.</span
+                                            ></span
+                                        ></span
+                                    >
+                                    <span
+                                        class="file-meta caption-5 mono loading"
+                                        >.tar.gz</span
+                                    >
+                                    <svg class="ic-sm">
+                                        <use href="#i-download-simple" />
+                                    </svg>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p class="download-foot body-6 muted">
+                        <span lang="ru"
+                            >Все версии и списки изменений доступны на
+                            <a
+                                href="https://github.com/Incoderr/OrbMC/releases"
+                                target="_blank"
+                                rel="noopener"
+                                >странице релизов</a
+                            >.</span
+                        >
+                        <span lang="en"
+                            >All versions and changelogs are available on the
+                            <a
+                                href="https://github.com/Incoderr/OrbMC/releases"
+                                target="_blank"
+                                rel="noopener"
+                                >releases page</a
+                            >.</span
+                        >
+                    </p>
+                </div>
+            </section>
+
+            <section id="faq">
+                <div class="wrap">
+                    <div class="section-head reveal">
+                        <h2 class="heading-2">
+                            <span lang="ru">Вопросы</span
+                            ><span lang="en">Questions</span>
+                        </h2>
+                    </div>
+                    <div class="faq reveal">
+                        <details>
+                            <summary class="title-3">
+                                <span
+                                    ><span lang="ru">Сколько стоит OrbMC?</span
+                                    ><span lang="en"
+                                        >How much does OrbMC cost?</span
+                                    ></span
+                                ><svg class="ic">
+                                    <use href="#i-caret-down" />
+                                </svg>
+                            </summary>
+                            <p class="body-3">
+                                <span lang="ru"
+                                    >OrbMC бесплатен. Исходный код открыт под
+                                    лицензией GPL 3.0.</span
+                                ><span lang="en"
+                                    >OrbMC is free. The source code is open
+                                    under GPL 3.0.</span
+                                >
+                            </p>
+                        </details>
+                        <details>
+                            <summary class="title-3">
+                                <span
+                                    ><span lang="ru"
+                                        >Нужен ли аккаунт Microsoft?</span
+                                    ><span lang="en"
+                                        >Do I need a Microsoft account?</span
+                                    ></span
+                                ><svg class="ic">
+                                    <use href="#i-caret-down" />
+                                </svg>
+                            </summary>
+                            <p class="body-3">
+                                <span lang="ru"
+                                    >Нет. Можно играть под локальным ником или
+                                    войти через Ely.by.</span
+                                ><span lang="en"
+                                    >No. You can play under a local name or sign
+                                    in with Ely.by.</span
+                                >
+                            </p>
+                        </details>
+
+                        <details>
+                            <summary class="title-3">
+                                <span
+                                    ><span lang="ru"
+                                        >Как обновляется лаунчер?</span
+                                    ><span lang="en"
+                                        >How is the launcher updated?</span
+                                    ></span
+                                ><svg class="ic">
+                                    <use href="#i-caret-down" />
+                                </svg>
+                            </summary>
+                            <p class="body-3">
+                                <span lang="ru"
+                                    >Версия с установщиком для Windows
+                                    обновляется автоматически при перезапуске.
+                                    Portable и сборки для Linux сообщают о новой
+                                    версии и открывают страницу загрузки.</span
+                                ><span lang="en"
+                                    >The Windows installer version updates
+                                    automatically on restart. Portable and Linux
+                                    builds report a new version and open the
+                                    download page.</span
+                                >
+                            </p>
+                        </details>
+                    </div>
+                </div>
+            </section>
+
+            <section class="final">
+                <div class="wrap reveal">
+                    <div class="section-head center">
+                        <h2 class="heading-2">
+                            <span lang="ru">Скачайте OrbMC</span
+                            ><span lang="en">Download OrbMC</span>
+                        </h2>
+                    </div>
+                    <div class="cta-group">
+                        <a
+                            class="btn btn-primary btn-large button-md"
+                            data-cta
+                            href="#download"
+                        >
+                            <svg class="ic">
+                                <use href="#i-download-simple" />
+                            </svg>
+                            <span data-cta-label
+                                ><span lang="ru">Скачать OrbMC</span
+                                ><span lang="en">Download OrbMC</span></span
+                            >
+                        </a>
+                        <span class="cta-note caption-2"
+                            ><span lang="ru"
+                                >Бесплатно. Windows 10, 11 и Linux.</span
+                            ><span lang="en"
+                                >Free. Windows 10, 11 and Linux.</span
+                            ></span
+                        >
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <div class="wrap">
+                <div class="foot">
+                    <a class="brand heading-6" href="#top"
+                        ><img
+                            src="logo.svg"
+                            alt=""
+                            width="24"
+                            height="24"
+                        />OrbMC</a
+                    >
+                    <span class="caption-2 muted"
+                        ><span lang="ru">Не связан с Mojang и Microsoft.</span
+                        ><span lang="en"
+                            >Not affiliated with Mojang or Microsoft.</span
+                        ></span
+                    >
+                    <div class="foot-links body-6">
+                        <a
+                            href="https://github.com/Incoderr/OrbMC"
+                            target="_blank"
+                            rel="noopener"
+                            >GitHub</a
+                        >
+                        <a
+                            href="https://github.com/Incoderr/OrbMC/releases"
+                            target="_blank"
+                            rel="noopener"
+                            ><span lang="ru">Релизы</span
+                            ><span lang="en">Releases</span></a
+                        >
+                        <a
+                            href="https://github.com/Incoderr/OrbMC/issues"
+                            target="_blank"
+                            rel="noopener"
+                            ><span lang="ru">Сообщить об ошибке</span
+                            ><span lang="en">Report a bug</span></a
+                        >
+                        <a
+                            href="https://github.com/Incoderr/OrbMC/blob/main/LICENSE"
+                            target="_blank"
+                            rel="noopener"
+                            ><span lang="ru">Лицензия</span
+                            ><span lang="en">License</span></a
+                        >
+                    </div>
+                </div>
+            </div>
+        </footer>
+
+        <script>
+            const RELEASES =
+                "https://github.com/Incoderr/OrbMC/releases/latest";
+            const API =
+                "https://api.github.com/repos/Incoderr/OrbMC/releases/latest";
+            const root = document.documentElement;
+            root.classList.add("js");
+            const reduced = matchMedia(
+                "(prefers-reduced-motion: reduce)",
+            ).matches;
+
+            // Language: saved choice, otherwise the browser's.
+            const TITLES = {
+                ru: "OrbMC: быстрый и легкий лаунчер",
+                en: "OrbMC: fast and lightweight launcher",
+            };
+            function setLang(lang) {
+                root.lang = lang;
+                document.title = TITLES[lang];
+                document
+                    .querySelectorAll("[data-lang]")
+                    .forEach((b) =>
+                        b.setAttribute(
+                            "aria-pressed",
+                            String(b.dataset.lang === lang),
+                        ),
+                    );
+                try {
+                    localStorage.setItem("orbmc-lang", lang);
+                } catch (_) {}
+            }
+            let saved = null;
+            try {
+                saved = localStorage.getItem("orbmc-lang");
+            } catch (_) {}
+            const browserLang = (navigator.language || "ru")
+                .toLowerCase()
+                .startsWith("ru")
+                ? "ru"
+                : "en";
+            setLang(saved === "ru" || saved === "en" ? saved : browserLang);
+            document
+                .querySelectorAll("[data-lang]")
+                .forEach((b) =>
+                    b.addEventListener("click", () => setLang(b.dataset.lang)),
+                );
+
+            // Mobile menu: links arrive one after another, 60 ms apart, 400 ms at most.
+            const shell = document.body;
+            const toggle = document.querySelector(".menu-toggle");
+            const menuLinks = [...document.querySelectorAll(".mobile-menu a")];
+            menuLinks.forEach(
+                (a, i) =>
+                    (a.style.transitionDelay = Math.min(i * 60, 400) + "ms"),
+            );
+            function setMenu(open) {
+                shell.classList.toggle("menu-open", open);
+                toggle.setAttribute("aria-expanded", String(open));
+            }
+            toggle.addEventListener("click", () =>
+                setMenu(!shell.classList.contains("menu-open")),
+            );
+            menuLinks.forEach((a) =>
+                a.addEventListener("click", () => setMenu(false)),
+            );
+            addEventListener("keydown", (e) => {
+                if (e.key === "Escape") setMenu(false);
+            });
+
+            // Sections rise into place once.
+            const revealer = new IntersectionObserver(
+                (entries) =>
+                    entries.forEach((e) => {
+                        if (e.isIntersecting) {
+                            e.target.classList.add("in");
+                            revealer.unobserve(e.target);
+                        }
+                    }),
+                { rootMargin: "0px 0px -10% 0px" },
+            );
+            document
+                .querySelectorAll(".reveal")
+                .forEach((el) => revealer.observe(el));
+
+            // The nav marks the section on screen.
+            const navLinks = [
+                ...document.querySelectorAll('.nav-links a[href^="#"]'),
+            ];
+            const spy = new IntersectionObserver(
+                (entries) =>
+                    entries.forEach((e) => {
+                        if (!e.isIntersecting) return;
+                        navLinks.forEach((a) =>
+                            a.setAttribute(
+                                "aria-current",
+                                String(
+                                    a.getAttribute("href") ===
+                                        "#" + e.target.id,
+                                ),
+                            ),
+                        );
+                    }),
+                { rootMargin: "-45% 0px -50% 0px" },
+            );
+            ["features", "how", "download", "faq"].forEach((id) =>
+                spy.observe(document.getElementById(id)),
+            );
+
+            // Tagline: each word brightens as it crosses a line in the middle of the screen.
+            document
+                .querySelectorAll("[data-words] > span")
+                .forEach((block) => {
+                    block.innerHTML = block.innerHTML
+                        .split(/<br\s*\/?>/)
+                        .map((line) =>
+                            line
+                                .trim()
+                                .split(/ +/)
+                                .map((w) => `<span class="word">${w}</span>`)
+                                .join(" "),
+                        )
+                        .join("<br>");
+                });
+            if (!reduced) {
+                const words = new IntersectionObserver(
+                    (entries) =>
+                        entries.forEach((e) => {
+                            if (e.isIntersecting) {
+                                e.target.classList.add("on");
+                                words.unobserve(e.target);
+                            }
+                        }),
+                    { rootMargin: "0px 0px -45% 0px" },
+                );
+                document
+                    .querySelectorAll(".word")
+                    .forEach((w) => words.observe(w));
+            }
+
+            // The visitor's system is highlighted and the main buttons point at its file.
+            const ua =
+                (navigator.userAgentData && navigator.userAgentData.platform) ||
+                navigator.platform ||
+                navigator.userAgent;
+            const os = /win/i.test(ua)
+                ? "windows"
+                : /linux|x11/i.test(ua) && !/android/i.test(navigator.userAgent)
+                  ? "linux"
+                  : null;
+            if (os)
+                document
+                    .querySelector(`.platform[data-os="${os}"]`)
+                    .classList.add("current");
+
+            const files = [...document.querySelectorAll("[data-asset]")];
+            files.forEach((a) => {
+                a.href = RELEASES;
+                a.target = "_blank";
+                a.rel = "noopener";
+            });
+            const line = document.getElementById("release-line");
+
+            function size(bytes) {
+                return bytes >= 1048576
+                    ? (bytes / 1048576).toFixed(1) + " MB"
+                    : Math.round(bytes / 1024) + " KB";
+            }
+            function done() {
+                files.forEach((a) =>
+                    a.querySelector(".file-meta").classList.remove("loading"),
+                );
+            }
+
+            fetch(API, { headers: { Accept: "application/vnd.github+json" } })
+                .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+                .then((release) => {
+                    const version = release.tag_name.replace(/^v/, "");
+                    const date = new Date(release.published_at);
+                    const ru = date.toLocaleDateString("ru-RU", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                    });
+                    const en = date.toLocaleDateString("en-US", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                    });
+                    line.innerHTML = `<span lang="ru">Версия <b>${version}</b> от ${ru}</span><span lang="en">Version <b>${version}</b>, released ${en}</span>`;
+                    files.forEach((a) => {
+                        const asset = release.assets.find((x) =>
+                            x.name.endsWith(a.dataset.asset),
+                        );
+                        if (!asset) return;
+                        a.href = asset.browser_download_url;
+                        a.removeAttribute("target");
+                        a.querySelector(".file-meta").textContent = size(
+                            asset.size,
+                        );
+                    });
+                    done();
+                    const main =
+                        os &&
+                        document.querySelector(
+                            `.platform[data-os="${os}"] [data-main]`,
+                        );
+                    if (main && main.href !== RELEASES) {
+                        const name = os === "windows" ? "Windows" : "Linux";
+                        document
+                            .querySelectorAll("[data-cta]")
+                            .forEach((cta) => {
+                                cta.href = main.href;
+                                cta.querySelector(
+                                    "[data-cta-label]",
+                                ).innerHTML =
+                                    `<span lang="ru">Скачать для ${name}</span><span lang="en">Download for ${name}</span>`;
+                            });
+                    }
+                })
+                .catch(() => {
+                    done();
+                    line.classList.add("error");
+                    line.innerHTML =
+                        '<span lang="ru">Не удалось узнать последнюю версию у GitHub. Ссылки ниже ведут на страницу релизов.</span>' +
+                        '<span lang="en">Could not get the latest version from GitHub. The links below open the releases page.</span>';
+                });
+        </script>
+    </body>
+</html>

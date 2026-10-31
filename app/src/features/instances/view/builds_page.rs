@@ -338,7 +338,7 @@ impl InstancesView {
         };
         let loader = loader_title(profile.loader);
         let profile_version = profile.loader_version.as_deref().unwrap_or("");
-        let profile_details = if profile.loader == LoaderChoice::Vanilla {
+        let mut profile_details = if profile.loader == LoaderChoice::Vanilla {
             format!("Minecraft {} · {loader}", profile.game_version)
         } else {
             format!(
@@ -346,6 +346,11 @@ impl InstancesView {
                 profile.game_version
             )
         };
+        let play_time = self.instances.read(cx).play_time(profile.id);
+        if !play_time.is_zero() {
+            profile_details.push_str(" · ");
+            profile_details.push_str(&format_play_time(play_time, locale));
+        }
         let profile_id = profile.id;
         let folder_label = locale.text("Открыть папку сборки", "Open build folder");
         let mod_filter = ModCompatibilityFilter {
@@ -658,7 +663,7 @@ impl InstancesView {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_delete_profile_confirmation(profile_id, window, cx);
                             }))
-                            .child(IconName::Delete),
+                            .child(IconName::Trash),
                     ),
             )
             .into_any_element()
@@ -690,6 +695,16 @@ impl InstancesView {
                 "Minecraft {} · {loader} {loader_version}",
                 profile.game_version
             )
+        };
+        let play_time = match self.instances.read(cx).play_time(profile_id) {
+            time if time.is_zero() => locale
+                .text("Ещё не запускалась", "Not played yet")
+                .to_owned(),
+            time => format!(
+                "{} {}",
+                locale.text("В игре:", "Played:"),
+                format_play_time(time, locale)
+            ),
         };
         let entries: Vec<installed::InstalledModEntry> =
             self.catalog.read(cx).build_mods(profile_id).to_vec();
@@ -796,7 +811,7 @@ impl InstancesView {
                         catalog.uninstall_mod(removal_filename.clone(), profile_id, cx)
                     });
                 }))
-                .child(IconName::Delete)
+                .child(IconName::Trash)
                 .into_any_element()];
 
                 let (label_color, sub_color) = if disabled {
@@ -940,6 +955,16 @@ impl InstancesView {
                                     .text_size(px(12.))
                                     .text_color(rgb(palette.muted))
                                     .child(details),
+                            )
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette.muted))
+                                    .child(IconName::Clock)
+                                    .child(play_time),
                             ),
                     )
                     .child(
@@ -1172,7 +1197,7 @@ impl InstancesView {
             .child(
                 tool(
                     "log-clear",
-                    IconName::Delete,
+                    IconName::Trash,
                     locale.text("Очистить", "Clear"),
                     false,
                 )

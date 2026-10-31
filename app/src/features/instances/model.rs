@@ -68,6 +68,13 @@ pub struct InstanceProfile {
     /// icon); used as the Discord status icon when present.
     #[serde(default)]
     pub modpack_icon: Option<String>,
+    /// Time spent in the game with this build, over all finished sessions.
+    #[serde(default)]
+    pub play_time_secs: u64,
+    /// Extra JVM options as the user typed them in the build settings;
+    /// split with `launch::split_arguments` at launch.
+    #[serde(default)]
+    pub jvm_arguments: String,
 }
 
 impl InstanceProfile {
@@ -91,6 +98,8 @@ impl InstanceProfile {
             installed_version_id: None,
             last_launch_order: 0,
             modpack_icon: None,
+            play_time_secs: 0,
+            jvm_arguments: String::new(),
         }
     }
 

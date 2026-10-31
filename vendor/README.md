@@ -25,3 +25,9 @@ by GPUI Kit contains equivalent fixes.
 The local patch avoids compiling the crate's unused `sysinfo` Windows feature
 set: architecture checks use Rust's target constant, while `sysinfo` remains a
 non-Windows-only dependency for OS version detection.
+
+- `src/utils/helper.rs` (`download_file`): Java runtime files from Mojang are
+  compressed as legacy `.lzma` (LZMA-alone), which the plain `.xz` decoder
+  rejected with "stream/file format not recognized", so no Java runtime could
+  be downloaded. The file is now read with liblzma's auto decoder, which
+  accepts both formats.
