@@ -60,7 +60,7 @@ jobs:
           ORBMC_DISCORD_APP_ID: ${{ vars.ORBMC_DISCORD_APP_ID }}
           ORBMC_UPDATE_PUBLIC_KEY: ${{ vars.ORBMC_UPDATE_PUBLIC_KEY }}
           CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
-        run: cargo build --release --package orbmc --no-default-features --target x86_64-pc-windows-msvc
+        run: cargo build --release --locked --package orbmc --no-default-features --target x86_64-pc-windows-msvc
 
       # windows-latest may come without Inno Setup.
       - name: Package installer and portable zip
