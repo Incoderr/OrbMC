@@ -345,7 +345,13 @@ fn resolve_neoforge_loader_version(
     version: LoaderVersion,
 ) -> Result<String> {
     match version {
-        LoaderVersion::Exact(version) => Ok(version),
+        LoaderVersion::Exact(version) => Ok(crate::loader::neoforge::normalize_version(&version)),
+        LoaderVersion::Latest | LoaderVersion::LatestStable
+            if crate::loader::neoforge::is_legacy_minecraft(minecraft_version) =>
+        {
+            let versions = crate::loader::neoforge::list_legacy_versions()?;
+            Ok(crate::loader::neoforge::latest_legacy(&versions)?.to_string())
+        }
         LoaderVersion::Latest | LoaderVersion::LatestStable => {
             let versions = crate::loader::neoforge::list_neoforge_versions()?;
             Ok(

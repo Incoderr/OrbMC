@@ -4,7 +4,9 @@ use mc_launcher_core::loader::{
         parse_maven_metadata as parse_forge_metadata,
     },
     neoforge::{
-        latest_for_minecraft as latest_neoforge_for_minecraft, neoforge_installed_version_id,
+        installer_url as neoforge_installer_url,
+        latest_for_minecraft as latest_neoforge_for_minecraft, latest_legacy,
+        neoforge_installed_version_id, normalize_version,
         parse_maven_metadata as parse_neoforge_metadata,
     },
 };
@@ -99,5 +101,30 @@ fn maps_calendar_release_without_patch_to_zero_patch_line() {
     assert_eq!(
         latest_neoforge_for_minecraft(&versions, "26.1").unwrap(),
         "26.1.0.42"
+    );
+}
+
+#[test]
+fn maps_legacy_1_20_1_neoforge_to_the_forge_artifact() {
+    let versions = vec![
+        "1.20.1-47.1.7".to_string(),
+        "1.20.1-47.1.5".to_string(),
+        "47.1.82".to_string(),
+        "1.20.1-47.1.106".to_string(),
+        "1.20.1-47.1.99".to_string(),
+    ];
+    assert_eq!(latest_legacy(&versions).unwrap(), "1.20.1-47.1.106");
+    assert_eq!(normalize_version("47.1.106"), "1.20.1-47.1.106");
+    assert_eq!(
+        neoforge_installed_version_id("1.20.1", "1.20.1-47.1.106"),
+        "1.20.1-forge-47.1.106"
+    );
+    assert_eq!(
+        neoforge_installer_url("47.1.106"),
+        "https://maven.neoforged.net/releases/net/neoforged/forge/1.20.1-47.1.106/forge-1.20.1-47.1.106-installer.jar"
+    );
+    assert_eq!(
+        neoforge_installer_url("21.4.150"),
+        "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.4.150/neoforge-21.4.150-installer.jar"
     );
 }

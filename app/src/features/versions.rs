@@ -5,8 +5,8 @@ use std::time::Duration;
 use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Request};
 use orbmc_core::minecraft::loaders::{
     FABRIC_LOADER_MANIFEST_URL, FORGE_PROMOTIONS_URL, FabricGameLoaderManifest,
-    FabricLoaderManifest, ForgeManifest, LoaderRelease, NEOFORGE_MAVEN_METADATA_URL,
-    NeoForgeManifest,
+    FabricLoaderManifest, ForgeManifest, LoaderRelease, NEOFORGE_LEGACY_MAVEN_METADATA_URL,
+    NEOFORGE_MAVEN_METADATA_URL, NeoForgeManifest,
 };
 use orbmc_core::minecraft::manifest::{VERSION_MANIFEST_URL, VersionManifest};
 use serde::{Deserialize, Serialize};
@@ -301,13 +301,24 @@ pub async fn fetch_fabric_game_loaders(
 
 async fn fetch_neoforge(client: Arc<dyn HttpClient>) -> Result<NeoForgeManifest, String> {
     let body = fetch_cached_text(
-        client,
+        client.clone(),
         "neoforge_maven_metadata",
         NEOFORGE_MAVEN_METADATA_URL,
         "NeoForge",
     )
     .await?;
-    NeoForgeManifest::parse(&body)
+    let mut manifest = NeoForgeManifest::parse(&body)?;
+    if let Ok(legacy) = fetch_cached_text(
+        client,
+        "neoforge_legacy_maven_metadata",
+        NEOFORGE_LEGACY_MAVEN_METADATA_URL,
+        "NeoForge",
+    )
+    .await
+    {
+        manifest.add_legacy(&legacy)?;
+    }
+    Ok(manifest)
 }
 
 async fn fetch_cached_text(

@@ -7,6 +7,10 @@ pub const FORGE_PROMOTIONS_URL: &str =
 pub const FABRIC_LOADER_MANIFEST_URL: &str = "https://meta.fabricmc.net/v2/versions/loader";
 pub const NEOFORGE_MAVEN_METADATA_URL: &str =
     "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml";
+/// NeoForge for Minecraft 1.20.1 lives in the old `forge` artifact with
+/// `1.20.1-47.1.x` versions; `neoforge` itself starts at 20.2.
+pub const NEOFORGE_LEGACY_MAVEN_METADATA_URL: &str =
+    "https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml";
 
 /// Which loader build to take when the user does not type one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,6 +165,39 @@ impl NeoForgeManifest {
         Ok(Self { versions })
     }
 
+    /// Adds the 1.20.1 builds from the legacy `forge` artifact. Only
+    /// `1.20.1-` prefixed entries are taken (the metadata also has a stray
+    /// unprefixed one), sorted oldest first like the modern list.
+    pub fn add_legacy(&mut self, xml: &str) -> Result<(), String> {
+        let metadata: MavenMetadata = quick_xml::de::from_str(xml)
+            .map_err(|error| format!("Не удалось разобрать Maven metadata NeoForge: {error}"))?;
+        let mut legacy: Vec<_> = metadata
+            .versioning
+            .versions
+            .version
+            .into_iter()
+            .filter_map(|version| {
+                let build = version.strip_prefix("1.20.1-")?;
+                let key: Vec<u32> = build
+                    .split('.')
+                    .map(|part| part.parse().ok())
+                    .collect::<Option<_>>()?;
+                Some((key, version))
+            })
+            .collect();
+        legacy.sort();
+        let mut versions: Vec<_> = legacy
+            .into_iter()
+            .map(|(_, version)| NeoForgeVersion {
+                minecraft_version: "1.20.1".to_owned(),
+                version,
+            })
+            .collect();
+        versions.append(&mut self.versions);
+        self.versions = versions;
+        Ok(())
+    }
+
     /// NeoForge build for a game version. Maven lists builds oldest first;
     /// stable builds have no `-beta` style suffix.
     pub fn pick(&self, game_version: &str, release: LoaderRelease) -> Option<&str> {
@@ -172,12 +209,16 @@ impl NeoForgeManifest {
         match release {
             LoaderRelease::Stable => newest_first
                 .clone()
-                .find(|version| !version.version.contains('-'))
+                .find(|version| !build_part(&version.version).contains('-'))
                 .or_else(|| newest_first.next()),
             LoaderRelease::Latest => newest_first.next(),
         }
         .map(|version| version.version.as_str())
     }
+}
+
+fn build_part(version: &str) -> &str {
+    version.strip_prefix("1.20.1-").unwrap_or(version)
 }
 
 #[derive(Clone, Debug)]
@@ -285,6 +326,33 @@ mod forge_version_tests {
         assert_eq!(
             manifest.pick("1.21.4", LoaderRelease::Stable),
             Some("21.4.1-beta")
+        );
+    }
+
+    #[test]
+    fn neoforge_reads_legacy_1_20_1_builds() {
+        let mut manifest = NeoForgeManifest::parse(
+            "<metadata><versioning><versions><version>20.2.3</version></versions></versioning></metadata>",
+        )
+        .unwrap();
+        manifest
+            .add_legacy(
+                "<metadata><versioning><versions><version>1.20.1-47.1.7</version><version>1.20.1-47.1.5</version><version>47.1.82</version><version>1.20.1-47.1.106</version><version>1.20.1-47.1.99</version></versions></versioning></metadata>",
+            )
+            .unwrap();
+        assert_eq!(
+            manifest.pick("1.20.1", LoaderRelease::Stable),
+            Some("1.20.1-47.1.106")
+        );
+        assert_eq!(
+            manifest.pick("1.20.2", LoaderRelease::Stable),
+            Some("20.2.3")
+        );
+        assert!(
+            manifest
+                .versions
+                .iter()
+                .all(|version| version.minecraft_version != "47.1")
         );
     }
 
