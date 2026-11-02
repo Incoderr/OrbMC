@@ -1,5 +1,4 @@
 use crate::features::settings::Locale;
-use gpui_kit::assets::IconName;
 
 pub mod catalog;
 pub mod installed;
@@ -246,16 +245,14 @@ pub enum ModDetailTab {
     Files,
     Dependencies,
     Screenshots,
-    Similar,
 }
 
 impl ModDetailTab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::Description,
         Self::Files,
         Self::Dependencies,
         Self::Screenshots,
-        Self::Similar,
     ];
 
     pub fn id(self) -> &'static str {
@@ -264,7 +261,6 @@ impl ModDetailTab {
             Self::Files => "mod-detail-files",
             Self::Dependencies => "mod-detail-dependencies",
             Self::Screenshots => "mod-detail-screenshots",
-            Self::Similar => "mod-detail-similar",
         }
     }
 
@@ -274,7 +270,6 @@ impl ModDetailTab {
             Self::Files => locale.text("Файлы", "Files"),
             Self::Dependencies => locale.text("Зависимости", "Dependencies"),
             Self::Screenshots => locale.text("Скриншоты", "Screenshots"),
-            Self::Similar => locale.text("Похожие", "Similar"),
         }
     }
 }
@@ -331,85 +326,6 @@ pub struct ModCompatibilityFilter {
     pub game_version: String,
     pub loader: ModLoaderFilter,
 }
-
-#[derive(Clone, Copy)]
-pub struct ModSample {
-    pub name: &'static str,
-    pub author: &'static str,
-    pub icon: IconName,
-    pub icon_background: u32,
-    pub icon_foreground: u32,
-    pub image_url: Option<&'static str>,
-}
-
-pub const SAMPLE_MODS: &[ModSample] = &[
-    ModSample {
-        name: "JEI (Just Enough Items)",
-        author: "mezz",
-        icon: IconName::BookOpen,
-        icon_background: 0x32834a,
-        icon_foreground: 0xffffff,
-        image_url: Some(
-            "https://cdn.modrinth.com/data/u6dRKJwZ/4a3f18ac0d096c9f8e9176984c44be4e58f94c89_96.webp",
-        ),
-    },
-    ModSample {
-        name: "JourneyMap",
-        author: "techbrew",
-        icon: IconName::Map,
-        icon_background: 0x173d36,
-        icon_foreground: 0xb7f4d4,
-        image_url: None,
-    },
-    ModSample {
-        name: "Create",
-        author: "simibubi",
-        icon: IconName::Blocks,
-        icon_background: 0xb07a37,
-        icon_foreground: 0x24180f,
-        image_url: None,
-    },
-    ModSample {
-        name: "Sodium",
-        author: "JellySquid",
-        icon: IconName::Cpu,
-        icon_background: 0x39a849,
-        icon_foreground: 0xffffff,
-        image_url: None,
-    },
-    ModSample {
-        name: "Farmer's Delight",
-        author: "vectorwing",
-        icon: IconName::BookOpen,
-        icon_background: 0x9e6841,
-        icon_foreground: 0xfff1d6,
-        image_url: None,
-    },
-    ModSample {
-        name: "Lithium",
-        author: "CaffeineMC",
-        icon: IconName::Cpu,
-        icon_background: 0x447b67,
-        icon_foreground: 0xe2fff2,
-        image_url: None,
-    },
-    ModSample {
-        name: "Xaero's Minimap",
-        author: "xaero96",
-        icon: IconName::Map,
-        icon_background: 0x65549a,
-        icon_foreground: 0xf1edff,
-        image_url: None,
-    },
-    ModSample {
-        name: "Botania",
-        author: "Vazkii",
-        icon: IconName::Asterisk,
-        icon_background: 0x406d3e,
-        icon_foreground: 0xe5ffd3,
-        image_url: None,
-    },
-];
 
 /// Sidebar filter sections that can be collapsed in the catalog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

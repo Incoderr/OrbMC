@@ -2085,7 +2085,7 @@ fn map_categories<'a>(tags: impl Iterator<Item = &'a str>) -> Vec<ModCategory> {
 fn is_loader(tag: &str) -> bool {
     matches!(
         tag.to_ascii_lowercase().as_str(),
-        "fabric" | "forge" | "neoforge" | "quilt"
+        "fabric" | "forge" | "neoforge"
     )
 }
 
@@ -2094,7 +2094,6 @@ fn display_loader(loader: &str) -> String {
         "fabric" => "Fabric".into(),
         "forge" => "Forge".into(),
         "neoforge" => "NeoForge".into(),
-        "quilt" => "Quilt".into(),
         _ => loader.to_owned(),
     }
 }
@@ -2103,7 +2102,6 @@ fn mod_loader_name(loader: u32) -> String {
     display_loader(match loader {
         1 => "forge",
         4 => "fabric",
-        5 => "quilt",
         6 => "neoforge",
         _ => "unknown",
     })

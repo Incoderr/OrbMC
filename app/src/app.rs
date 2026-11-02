@@ -19,9 +19,23 @@ mod sidebar;
 const SIDEBAR_WIDTH: f32 = 252.;
 const SIDEBAR_COLLAPSED_WIDTH: f32 = 76.;
 const SIDEBAR_ANIMATION: std::time::Duration = std::time::Duration::from_millis(220);
+/// How many pages "back" remembers; older ones are dropped.
+const HISTORY_LIMIT: usize = 50;
+
+actions!(launcher, [GoBack, GoForward]);
+
+pub fn bind_navigation_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("alt-left", GoBack, None),
+        KeyBinding::new("alt-right", GoForward, None),
+    ]);
+}
 
 pub struct LauncherApp {
     active_page: Page,
+    /// Browser-like history: pages left behind and pages "back" walked out of.
+    back_history: Vec<Page>,
+    forward_history: Vec<Page>,
     settings: Entity<SettingsState>,
     _settings_observer: Subscription,
     skins: Entity<crate::features::skins::SkinsView>,
@@ -124,6 +138,14 @@ impl LauncherApp {
                 use crate::features::mods::CatalogEvent;
                 let page = match *event {
                     CatalogEvent::OpenDetails => Page::ModDetails,
+                    // The project page's own "back" walks the history when it
+                    // leads to the search, so "forward" can return to the project.
+                    CatalogEvent::BackToCatalog
+                        if this.back_history.last() == Some(&Page::Catalog) =>
+                    {
+                        this.go_back(window, cx);
+                        return;
+                    }
                     CatalogEvent::BackToCatalog => Page::Catalog,
                     CatalogEvent::OpenBuilds => Page::Instances,
                 };
@@ -191,6 +213,8 @@ impl LauncherApp {
         Self {
             settings_view,
             active_page: Page::Home,
+            back_history: Vec::new(),
+            forward_history: Vec::new(),
             settings,
             _settings_observer: settings_observer,
             skins,
@@ -219,6 +243,46 @@ impl LauncherApp {
     }
 
     fn navigate_to(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_page == page {
+            return;
+        }
+        if self.back_history.len() == HISTORY_LIMIT {
+            self.back_history.remove(0);
+        }
+        self.back_history.push(self.active_page);
+        self.forward_history.clear();
+        self.show_page(page, window, cx);
+    }
+
+    fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        while let Some(page) = self.back_history.pop() {
+            if self.page_exists(page, cx) {
+                self.forward_history.push(self.active_page);
+                self.show_page(page, window, cx);
+                return;
+            }
+        }
+    }
+
+    fn go_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        while let Some(page) = self.forward_history.pop() {
+            if self.page_exists(page, cx) {
+                self.back_history.push(self.active_page);
+                self.show_page(page, window, cx);
+                return;
+            }
+        }
+    }
+
+    /// A removed build's page is skipped when walking the history.
+    fn page_exists(&self, page: Page, cx: &App) -> bool {
+        match page {
+            Page::InstanceDetails(id) => self.instances.read(cx).profile(id).is_some(),
+            _ => true,
+        }
+    }
+
+    fn show_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_page == page {
             return;
         }
@@ -324,6 +388,17 @@ impl Render for LauncherApp {
             .flex()
             .size_full()
             .bg(rgb(palette.background))
+            .on_action(cx.listener(|this, _: &GoBack, window, cx| this.go_back(window, cx)))
+            .on_action(cx.listener(|this, _: &GoForward, window, cx| this.go_forward(window, cx)))
+            // Side mouse buttons, like in a browser.
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, window, cx| this.go_back(window, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _, window, cx| this.go_forward(window, cx)),
+            )
             .child(sidebar)
             .child(
                 div()

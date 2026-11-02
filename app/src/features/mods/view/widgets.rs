@@ -4,19 +4,8 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt;
 use gpui_kit::*;
 
-use crate::features::mods::ModSample;
 use crate::features::mods::catalog::ModProject;
 use crate::shared::theme::Palette;
-
-pub(crate) fn mod_thumbnail(sample: &ModSample, size: Pixels) -> AnyElement {
-    mod_thumbnail_data(
-        sample.icon,
-        sample.icon_background,
-        sample.icon_foreground,
-        sample.image_url,
-        size,
-    )
-}
 
 pub(crate) fn mod_project_thumbnail(project: &ModProject, size: Pixels) -> AnyElement {
     mod_thumbnail_data(

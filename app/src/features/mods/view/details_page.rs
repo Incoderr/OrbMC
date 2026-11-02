@@ -529,19 +529,6 @@ impl CatalogView {
                 ))
                 .into_any_element(),
             ModDetailTab::Screenshots => self.mod_screenshots(sample, palette, locale, cx),
-            ModDetailTab::Similar => {
-                let similar: Vec<_> = SAMPLE_MODS
-                    .iter()
-                    .take(3)
-                    .map(|candidate| self.home_mod_card(candidate, palette, locale))
-                    .collect();
-                div()
-                    .h_flex()
-                    .w_full()
-                    .gap_3()
-                    .children(similar)
-                    .into_any_element()
-            }
         }
     }
 
@@ -609,7 +596,11 @@ impl CatalogView {
                 .id(format!("mod-gallery-viewer-{project_id}"))
                 .w_full()
                 .min_w_0()
-                .h(px(300.))
+                // A fixed height the page cannot squeeze into a strip; the
+                // screenshot is contained in it, keeping its proportions. An
+                // aspect ratio with a max height narrows the box instead.
+                .flex_shrink_0()
+                .h(px(440.))
                 .rounded(px(10.))
                 .overflow_hidden()
                 .bg(rgb(palette.background))
@@ -919,45 +910,4 @@ fn escape_html_attribute(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-}
-
-impl CatalogView {
-    pub(crate) fn home_mod_card(
-        &self,
-        sample: &ModSample,
-        palette: Palette,
-        locale: Locale,
-    ) -> AnyElement {
-        div()
-            .v_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_3()
-            .p_3()
-            .rounded(px(10.))
-            .bg(rgb(palette.surface))
-            .border_1()
-            .border_color(rgb(palette.border))
-            .child(mod_thumbnail(sample, px(34.)))
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(palette.foreground))
-                            .child(sample.name),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(rgb(palette.muted))
-                            .child(locale.text("от ", "by "))
-                            .child(sample.author),
-                    ),
-            )
-            .into_any_element()
-    }
 }

@@ -81,6 +81,7 @@ fn main() -> Result<(), reqwest::Error> {
             gpui_kit::init(cx);
             gpui_kit::component::set_locale(Locale::Ru.tag());
             Theme::change(ThemeMode::Dark, None, cx);
+            app::bind_navigation_keys(cx);
 
             #[cfg(all(feature = "devtools", debug_assertions))]
             {
