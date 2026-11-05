@@ -45,7 +45,7 @@ jobs:
         env:
           ORBMC_DISCORD_APP_ID: ${{ vars.ORBMC_DISCORD_APP_ID }}
           ORBMC_UPDATE_PUBLIC_KEY: ${{ vars.ORBMC_UPDATE_PUBLIC_KEY }}
-          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+          ORBMC_CURSEFORGE_PROXY: ${{ vars.ORBMC_CURSEFORGE_PROXY }}
         run: cargo build --release --locked --package orbmc --no-default-features
 
       - name: Package

@@ -717,7 +717,7 @@ impl CatalogView {
                     .v_flex()
                     .gap_1()
                     .children(sources)
-                    .when(super::super::curseforge_api_key().is_none(), |list| {
+                    .when(super::super::curseforge_api().is_none(), |list| {
                         list.child(
                             div()
                                 .px_2()

@@ -453,10 +453,10 @@ impl CatalogView {
                 }
             };
             let generation = self.mods.installed.begin(id);
-            let key = super::curseforge_api_key();
+            let curseforge = super::curseforge_api();
             let task = cx
                 .background_executor()
-                .spawn(async move { installed::scan(&location, key.as_deref()) });
+                .spawn(async move { installed::scan(&location, curseforge.as_ref()) });
             cx.spawn(async move |this, cx| {
                 let inventory = task.await;
                 let _ = this.update(cx, |this, cx| {
@@ -482,7 +482,7 @@ impl CatalogView {
         let (request_id, query, sort, source, compatibility_filter, kind, page) =
             self.mods.begin_search();
         let client = cx.http_client();
-        let curseforge_api_key = super::curseforge_api_key();
+        let curseforge = super::curseforge_api();
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -503,7 +503,7 @@ impl CatalogView {
                 query,
                 sort,
                 source,
-                curseforge_api_key,
+                curseforge,
                 compatibility_filter,
                 kind,
                 page,
@@ -577,16 +577,16 @@ impl CatalogView {
         cx: &mut Context<Self>,
     ) {
         let client = cx.http_client();
-        let curseforge_api_key = super::curseforge_api_key();
+        let curseforge = super::curseforge_api();
         cx.spawn(async move |this, cx| {
             let (description, info) = futures::join!(
                 fetch_project_description(
                     client.clone(),
                     project_id.clone(),
                     source,
-                    curseforge_api_key.clone(),
+                    curseforge.clone(),
                 ),
-                fetch_project_info(client, project_id, source, curseforge_api_key),
+                fetch_project_info(client, project_id, source, curseforge),
             );
             let _ = this.update(cx, |this, cx| {
                 if this.mods.finish_description_load(request_id, description) {
@@ -640,7 +640,7 @@ impl CatalogView {
         };
         self.mods.installed.begin_install(&project.id);
         let client = cx.http_client();
-        let curseforge_api_key = super::curseforge_api_key();
+        let curseforge = super::curseforge_api();
         let project_id = project.id;
         let pending_project_id = project_id.clone();
         let source = project.source;
@@ -666,7 +666,7 @@ impl CatalogView {
                     compatibility,
                     mods_location,
                 },
-                curseforge_api_key,
+                curseforge,
                 transfer,
             )
             .await
@@ -750,7 +750,7 @@ impl CatalogView {
         };
         self.mods.installed.begin_install(&project_id);
         let client = cx.http_client();
-        let curseforge_api_key = super::curseforge_api_key();
+        let curseforge = super::curseforge_api();
         cx.notify();
 
         let download_task = cx.background_executor().spawn(async move {
@@ -763,7 +763,7 @@ impl CatalogView {
                     game_version,
                     game_directory,
                 },
-                curseforge_api_key,
+                curseforge,
                 transfer,
             )
             .await
@@ -903,8 +903,8 @@ impl CatalogView {
                 ),
                 Err(error) => removal_error = Some(error),
             }
-            let api_key = super::curseforge_api_key();
-            let mut inventory = installed::scan(&location, api_key.as_deref());
+            let curseforge = super::curseforge_api();
+            let mut inventory = installed::scan(&location, curseforge.as_ref());
             if let Some(error) = removal_error {
                 inventory.warning = Some(match inventory.warning.take() {
                     Some(existing) => format!("{existing}; {error}"),

@@ -8,3 +8,8 @@
 Thumbs.db
 desktop.ini
 .claude
+
+# Cloudflare Worker local state and secrets
+.wrangler/
+.dev.vars
+node_modules/

@@ -37,7 +37,7 @@ cargo build --release
 | ------------------------- | --------------------------------------------------------------------------- |
 | `ORBMC_DISCORD_APP_ID`    | ID приложения Discord для отображения статуса                               |
 | `ORBMC_UPDATE_PUBLIC_KEY` | публичный ключ minisign; без него лаунчер только уведомляет о новых версиях |
-| `CURSEFORGE_API_KEY`      | ключ CurseForge API (интеграция с CurseForge сейчас отключена)              |
+| `ORBMC_CURSEFORGE_PROXY`  | адрес прокси CurseForge (`infra/curseforge-proxy`); без него каталог ищет только в Modrinth |
 
 Релиз выпускается тегом `vX.Y.Z`, совпадающим с версией в `Cargo.toml`;
 workflow `release.yml` собирает, подписывает и публикует исполняемый файл.

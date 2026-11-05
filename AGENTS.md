@@ -43,6 +43,7 @@ assets/logo/                 application icon (embedded by app/build.rs)
 assets/icons/remix/          Remix Icon SVGs (Apache-2.0), see `shell/icons.rs`
 installer/orbmc.iss          Windows installer (Inno Setup)
 packaging/linux/             Linux .desktop file and packaging scripts
+infra/curseforge-proxy/      Cloudflare Worker that holds the CurseForge key
 site/                        project website (static HTML; download links come
                              from the latest GitHub release at run time),
                              published to GitHub Pages by workflows/pages.yml
@@ -217,18 +218,22 @@ These are the conventions the code already follows. Use them for new work.
 
 ### CurseForge API key
 
-`features::mods::curseforge_api_key()` is the only place that reads it: the
-`CURSEFORGE_API_KEY` environment variable at run time, otherwise the value of
-`CURSEFORGE_API_KEY` at **build** time (baked in with `option_env!`). Release
-builds get it from a CI secret; never commit the key. CurseForge is currently switched
-off entirely (`features::mods::CURSEFORGE_ENABLED = false`): the catalog and
-mod identification use Modrinth only and the source filter is hidden. Without a key the
-catalog searches Modrinth only and says so under the source filter.
+The launcher never carries the CurseForge API key. Release builds call the
+Cloudflare Worker in `infra/curseforge-proxy`, which holds the key as a
+Worker secret, allows only the endpoints the launcher uses, caches answers
+and rate-limits per IP. `features::mods::curseforge_api()` is the only place
+that decides where requests go: `CURSEFORGE_API_KEY` at run time talks to
+the API directly (developers' own key), otherwise `ORBMC_CURSEFORGE_PROXY`
+(run time, then baked in at build time from a CI variable). New CurseForge
+endpoints must also be allowed in the Worker. Never commit the key.
+CurseForge is switched on (`features::mods::CURSEFORGE_ENABLED = true`).
+Without a key or proxy the catalog searches Modrinth only and says so under
+the source filter.
 
 ### Build-time values and logs
 
 - `ORBMC_DISCORD_APP_ID` (Discord status), `ORBMC_UPDATE_PUBLIC_KEY`
-  (minisign key for self-updates) and `CURSEFORGE_API_KEY` are read with
+  (minisign key for self-updates) and `ORBMC_CURSEFORGE_PROXY` are read with
   `option_env!` at build time; CI passes them (`vars` / `secrets`). Builds
   without them just lack the feature (without the update key the launcher
   only links to new releases).

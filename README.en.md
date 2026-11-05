@@ -34,7 +34,7 @@ Optional build-time environment variables:
 | ------------------------- | ------------------------------------------------------------------------------------ |
 | `ORBMC_DISCORD_APP_ID`    | Discord application ID used to display the user's status                             |
 | `ORBMC_UPDATE_PUBLIC_KEY` | minisign public key; without it, the launcher only notifies users about new versions |
-| `CURSEFORGE_API_KEY`      | CurseForge API key (CurseForge integration is currently disabled)                    |
+| `ORBMC_CURSEFORGE_PROXY`  | CurseForge proxy address (`infra/curseforge-proxy`); without it the catalog searches Modrinth only |
 
 Releases are created using tags in the `vX.Y.Z` format, matching the version specified in `Cargo.toml`. The `release.yml` workflow builds, signs, and publishes the executable.
 

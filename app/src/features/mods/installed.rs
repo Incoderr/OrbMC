@@ -1,3 +1,4 @@
+use super::CurseForgeApi;
 use crate::platform::{mod_files, profile_store};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -369,7 +370,7 @@ fn remove_record_file(directory: &Path, filename: &str) -> Result<(), String> {
     }
 }
 
-pub fn scan(location: &ModsLocation, api_key: Option<&str>) -> Inventory {
+pub fn scan(location: &ModsLocation, curseforge: Option<&CurseForgeApi>) -> Inventory {
     let directory = location.mods.as_path();
     let files = match mod_files::scan(directory) {
         Ok(files) => files,
@@ -447,12 +448,11 @@ pub fn scan(location: &ModsLocation, api_key: Option<&str>) -> Inventory {
                 Err(error) => warnings.push(format!("Modrinth: {error}")),
             }
         }
-        if let Some(api_key) = api_key.filter(|key| !key.is_empty()) {
+        if let Some(api) = curseforge {
             let fingerprints: Vec<_> = files.iter().map(|file| file.fingerprint).collect();
             for batch in fingerprints.chunks(100) {
-                let result = client
-                    .post("https://api.curseforge.com/v1/fingerprints/432")
-                    .header("x-api-key", api_key)
+                let result = api
+                    .authorize(client.post(api.url("/v1/fingerprints/432")))
                     .header("Content-Type", "application/json")
                     .body(serde_json::json!({"fingerprints":batch}).to_string())
                     .send()
@@ -486,7 +486,7 @@ pub fn scan(location: &ModsLocation, api_key: Option<&str>) -> Inventory {
                 }
             }
         }
-        enrich_metadata(&mut records, &client, api_key, &mut warnings);
+        enrich_metadata(&mut records, &client, curseforge, &mut warnings);
     } else {
         warnings.push("Не удалось создать клиент для определения модов".into());
     }
@@ -973,7 +973,7 @@ struct MetaMods {
 fn enrich_metadata(
     records: &mut [Record],
     client: &reqwest::blocking::Client,
-    curseforge_api_key: Option<&str>,
+    curseforge: Option<&CurseForgeApi>,
     warnings: &mut Vec<String>,
 ) {
     let mut missing: Vec<String> = records
@@ -987,7 +987,7 @@ fn enrich_metadata(
     let mut known: HashMap<String, ProjectMeta> = HashMap::new();
     if !missing.is_empty() {
         fetch_modrinth_meta(&mut known, client, &missing, warnings);
-        fetch_curseforge_meta(&mut known, client, curseforge_api_key, &missing, warnings);
+        fetch_curseforge_meta(&mut known, client, curseforge, &missing, warnings);
     }
 
     for record in records.iter_mut() {
@@ -1058,7 +1058,7 @@ fn fetch_modrinth_meta(
 fn fetch_curseforge_meta(
     known: &mut HashMap<String, ProjectMeta>,
     client: &reqwest::blocking::Client,
-    curseforge_api_key: Option<&str>,
+    curseforge: Option<&CurseForgeApi>,
     missing: &[String],
     warnings: &mut Vec<String>,
 ) {
@@ -1070,13 +1070,12 @@ fn fetch_curseforge_meta(
     if ids.is_empty() {
         return;
     }
-    let Some(api_key) = curseforge_api_key.filter(|key| !key.is_empty()) else {
+    let Some(api) = curseforge else {
         return;
     };
     for chunk in ids.chunks(100) {
-        let result = client
-            .post("https://api.curseforge.com/v1/mods")
-            .header("x-api-key", api_key)
+        let result = api
+            .authorize(client.post(api.url("/v1/mods")))
             .header("Content-Type", "application/json")
             .body(serde_json::json!({"modIds": chunk}).to_string())
             .send()

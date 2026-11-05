@@ -29,13 +29,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       # Release builds carry the Discord application, the update public key
-      # and, when CurseForge is switched on, its API key. All are baked in at
+      # and the CurseForge proxy address (the API key stays on the proxy). All are baked in at
       # compile time.
       - name: Build launcher
         env:
           ORBMC_DISCORD_APP_ID: ${{ vars.ORBMC_DISCORD_APP_ID }}
           ORBMC_UPDATE_PUBLIC_KEY: ${{ vars.ORBMC_UPDATE_PUBLIC_KEY }}
-          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+          ORBMC_CURSEFORGE_PROXY: ${{ vars.ORBMC_CURSEFORGE_PROXY }}
         run: cargo build --release --locked --package orbmc --no-default-features --target x86_64-pc-windows-msvc
 
       - name: Record built commit

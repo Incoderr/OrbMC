@@ -907,19 +907,62 @@ pub fn mod_loader_filter(loader: crate::features::versions::LoaderChoice) -> Mod
     }
 }
 
-/// CurseForge is switched off for now: the catalog, mod identification and
-/// the source filter use Modrinth only. The integration stays in place.
-pub const CURSEFORGE_ENABLED: bool = false;
+/// Master switch for the CurseForge integration. Even when on, CurseForge is
+/// used only if it is reachable (see `curseforge_api`).
+pub const CURSEFORGE_ENABLED: bool = true;
 
-/// CurseForge API key: `CURSEFORGE_API_KEY` at run time wins, otherwise the
-/// key baked into this launcher build (`CURSEFORGE_API_KEY` at compile time).
-/// Without one (or with CurseForge switched off) only Modrinth is used.
-pub fn curseforge_api_key() -> Option<String> {
+/// Where CurseForge requests go. Release builds never carry the API key: they
+/// talk to the OrbMC proxy (`infra/curseforge-proxy`), which adds the key on
+/// the server. A developer's own key goes straight to the API.
+#[derive(Clone)]
+pub struct CurseForgeApi {
+    base: String,
+    key: Option<String>,
+}
+
+impl CurseForgeApi {
+    /// `path` starts with `/v1/`, exactly as in the CurseForge API docs.
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base)
+    }
+
+    /// The `x-api-key` header value; `None` behind the proxy.
+    pub fn key(&self) -> Option<&str> {
+        self.key.as_deref()
+    }
+
+    pub fn authorize(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        match self.key() {
+            Some(key) => request.header("x-api-key", key),
+            None => request,
+        }
+    }
+}
+
+/// `CURSEFORGE_API_KEY` at run time talks to the API directly; otherwise the
+/// proxy from `ORBMC_CURSEFORGE_PROXY` (run time, then baked in at build
+/// time). Without either (or with CurseForge switched off) only Modrinth is
+/// used.
+pub fn curseforge_api() -> Option<CurseForgeApi> {
     if !CURSEFORGE_ENABLED {
         return None;
     }
-    std::env::var("CURSEFORGE_API_KEY")
+    let present = |value: &String| !value.trim().is_empty();
+    if let Some(key) = std::env::var("CURSEFORGE_API_KEY").ok().filter(present) {
+        return Some(CurseForgeApi {
+            base: "https://api.curseforge.com".to_owned(),
+            key: Some(key.trim().to_owned()),
+        });
+    }
+    let proxy = std::env::var("ORBMC_CURSEFORGE_PROXY")
         .ok()
-        .or_else(|| option_env!("CURSEFORGE_API_KEY").map(str::to_owned))
-        .filter(|key| !key.trim().is_empty())
+        .or_else(|| option_env!("ORBMC_CURSEFORGE_PROXY").map(str::to_owned))
+        .filter(present)?;
+    Some(CurseForgeApi {
+        base: proxy.trim().trim_end_matches('/').to_owned(),
+        key: None,
+    })
 }

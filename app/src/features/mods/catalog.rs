@@ -4,16 +4,14 @@ use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Method, Reque
 use serde::Deserialize;
 
 use super::{
-    CATALOG_PAGE_SIZE, ModCategory, ModCompatibilityFilter, ModSearchFilters, ModSort, ProjectKind,
-    installed::InstalledMeta,
+    CATALOG_PAGE_SIZE, CurseForgeApi, ModCategory, ModCompatibilityFilter, ModSearchFilters,
+    ModSort, ProjectKind, installed::InstalledMeta,
 };
 use crate::features::downloads::{FileDownload, Transfer, download_file};
 use crate::features::settings::Locale;
 use gpui_kit::assets::IconName;
 
 const MODRINTH_SEARCH_URL: &str = "https://api.modrinth.com/v2/search";
-const CURSEFORGE_SEARCH_URL: &str = "https://api.curseforge.com/v1/mods/search";
-const CURSEFORGE_MOD_DESCRIPTION_URL: &str = "https://api.curseforge.com/v1/mods";
 const CURSEFORGE_MINECRAFT_GAME_ID: u32 = 432;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -104,7 +102,7 @@ pub async fn fetch_project_info(
     client: Arc<dyn HttpClient>,
     project_id: String,
     source: ModSource,
-    curseforge_api_key: Option<String>,
+    curseforge: Option<CurseForgeApi>,
 ) -> Result<ModProjectInfo, CatalogProviderError> {
     match source {
         ModSource::Modrinth => {
@@ -122,14 +120,13 @@ pub async fn fetch_project_info(
             Ok(info)
         }
         ModSource::CurseForge => {
-            let api_key = curseforge_api_key
-                .filter(|key| !key.trim().is_empty())
-                .ok_or_else(|| CatalogProviderError {
-                    provider: source,
-                    message: "This launcher build has no CurseForge API key.".to_owned(),
-                    missing_api_key: true,
-                    no_compatible_file: false,
-                })?;
+            let api = curseforge.ok_or_else(|| CatalogProviderError {
+                provider: source,
+                message: "This launcher build has no CurseForge API key.".to_owned(),
+                missing_api_key: true,
+                no_compatible_file: false,
+            })?;
+            let mods_url = api.url("/v1/mods");
             let id = project_id
                 .strip_prefix("curseforge:")
                 .unwrap_or(&project_id)
@@ -137,8 +134,8 @@ pub async fn fetch_project_info(
                 .map_err(|error| {
                     provider_error(source, format!("Invalid CurseForge project id: {error}"))
                 })?;
-            let url = format!("{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}");
-            let body = request_body(client, &url, Some(&api_key), source).await?;
+            let url = format!("{mods_url}/{id}");
+            let body = request_body(client, &url, api.key(), source).await?;
             let response: CurseForgeProjectResponse =
                 serde_json::from_str(&body).map_err(|error| {
                     provider_error(source, format!("Invalid project details response: {error}"))
@@ -324,7 +321,7 @@ pub async fn fetch_project_description(
     client: Arc<dyn HttpClient>,
     project_id: String,
     source: ModSource,
-    curseforge_api_key: Option<String>,
+    curseforge: Option<CurseForgeApi>,
 ) -> Result<String, CatalogProviderError> {
     let (url, api_key) = match source {
         ModSource::Modrinth => {
@@ -335,7 +332,7 @@ pub async fn fetch_project_description(
             )
         }
         ModSource::CurseForge => {
-            let Some(api_key) = curseforge_api_key.filter(|key| !key.trim().is_empty()) else {
+            let Some(api) = curseforge else {
                 return Err(CatalogProviderError {
                     provider: source,
                     message: "This launcher build has no CurseForge API key.".into(),
@@ -351,8 +348,8 @@ pub async fn fetch_project_description(
                     provider_error(source, format!("Invalid CurseForge project id: {error}"))
                 })?;
             (
-                format!("{CURSEFORGE_MOD_DESCRIPTION_URL}/{project_id}/description?stripped=true"),
-                Some(api_key),
+                api.url(&format!("/v1/mods/{project_id}/description?stripped=true")),
+                api.key().map(str::to_owned),
             )
         }
         ModSource::All => {
@@ -399,7 +396,7 @@ pub async fn search_catalog(
     query: String,
     sort: ModSort,
     source: ModSource,
-    curseforge_api_key: Option<String>,
+    curseforge: Option<CurseForgeApi>,
     compatibility_filter: ModSearchFilters,
     kind: ProjectKind,
     page: usize,
@@ -431,7 +428,7 @@ pub async fn search_catalog(
                     client,
                     &query,
                     sort,
-                    curseforge_api_key,
+                    curseforge,
                     compatibility_filter,
                     kind,
                     offset,
@@ -458,7 +455,7 @@ pub async fn search_catalog(
                 client,
                 &query,
                 sort,
-                curseforge_api_key,
+                curseforge,
                 compatibility_filter,
                 kind,
                 offset,
@@ -530,7 +527,7 @@ pub struct ModInstall {
 pub async fn install_compatible_mod(
     client: Arc<dyn HttpClient>,
     request: ModInstall,
-    curseforge_api_key: Option<String>,
+    curseforge: Option<CurseForgeApi>,
     transfer: Transfer,
 ) -> Result<ModInstallOutcome, CatalogProviderError> {
     let ModInstall {
@@ -570,7 +567,7 @@ pub async fn install_compatible_mod(
             &project,
             source,
             &compatibility,
-            curseforge_api_key.as_deref(),
+            curseforge.as_ref(),
         )
         .await
         {
@@ -595,13 +592,7 @@ pub async fn install_compatible_mod(
         let mut meta = if is_main {
             main_meta.clone()
         } else {
-            fetch_mod_meta_or_default(
-                client.clone(),
-                &project,
-                source,
-                curseforge_api_key.as_deref(),
-            )
-            .await
+            fetch_mod_meta_or_default(client.clone(), &project, source, curseforge.as_ref()).await
         };
         // Modrinth labels are already version numbers only; curseforge ones
         // carry the project name as a prefix.
@@ -640,7 +631,7 @@ pub struct ContentInstall {
 pub async fn install_compatible_content(
     client: Arc<dyn HttpClient>,
     request: ContentInstall,
-    curseforge_api_key: Option<String>,
+    curseforge: Option<CurseForgeApi>,
     transfer: Transfer,
 ) -> Result<String, CatalogProviderError> {
     let ContentInstall {
@@ -667,7 +658,7 @@ pub async fn install_compatible_content(
         source,
         kind,
         &game_version,
-        curseforge_api_key.as_deref(),
+        curseforge.as_ref(),
     )
     .await?;
     let destination_directory = destination_directory.join(directory_name);
@@ -734,9 +725,9 @@ pub async fn fetch_mod_meta_or_default(
     client: Arc<dyn HttpClient>,
     project_id: &str,
     source: ModSource,
-    curseforge_api_key: Option<&str>,
+    curseforge: Option<&CurseForgeApi>,
 ) -> InstalledMeta {
-    match fetch_mod_meta(client, project_id, source, curseforge_api_key).await {
+    match fetch_mod_meta(client, project_id, source, curseforge).await {
         Ok(meta) => meta.into(),
         Err(error) => {
             tracing::warn!(project_id = %project_id, error = ?error, "mod metadata lookup failed");
@@ -751,7 +742,7 @@ async fn fetch_mod_meta(
     client: Arc<dyn HttpClient>,
     project_id: &str,
     source: ModSource,
-    curseforge_api_key: Option<&str>,
+    curseforge: Option<&CurseForgeApi>,
 ) -> Result<ModMeta, CatalogProviderError> {
     match source {
         ModSource::Modrinth => {
@@ -783,14 +774,13 @@ async fn fetch_mod_meta(
             })
         }
         ModSource::CurseForge => {
-            let api_key = curseforge_api_key
-                .filter(|key| !key.trim().is_empty())
-                .ok_or_else(|| CatalogProviderError {
-                    provider: source,
-                    message: "This launcher build has no CurseForge API key.".into(),
-                    missing_api_key: true,
-                    no_compatible_file: false,
-                })?;
+            let api = curseforge.ok_or_else(|| CatalogProviderError {
+                provider: source,
+                message: "This launcher build has no CurseForge API key.".into(),
+                missing_api_key: true,
+                no_compatible_file: false,
+            })?;
+            let mods_url = api.url("/v1/mods");
             let id = project_id
                 .strip_prefix("curseforge:")
                 .unwrap_or(project_id)
@@ -798,8 +788,8 @@ async fn fetch_mod_meta(
                 .map_err(|error| {
                     provider_error(source, format!("Invalid CurseForge project id: {error}"))
                 })?;
-            let url = format!("{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}");
-            let body = request_body(client, &url, Some(api_key), source).await?;
+            let url = format!("{mods_url}/{id}");
+            let body = request_body(client, &url, api.key(), source).await?;
             let response: CurseForgeMetaResponse =
                 serde_json::from_str(&body).map_err(|error| {
                     provider_error(source, format!("Invalid project details response: {error}"))
@@ -959,7 +949,7 @@ async fn resolve_compatible_mod_file(
     project_id: &str,
     source: ModSource,
     compatibility: &ModCompatibilityFilter,
-    curseforge_api_key: Option<&str>,
+    curseforge: Option<&CurseForgeApi>,
 ) -> Result<ResolvedDownload, CatalogProviderError> {
     match source {
         ModSource::Modrinth => {
@@ -1025,14 +1015,13 @@ async fn resolve_compatible_mod_file(
             ))
         }
         ModSource::CurseForge => {
-            let api_key = curseforge_api_key
-                .filter(|key| !key.trim().is_empty())
-                .ok_or_else(|| CatalogProviderError {
-                    provider: source,
-                    message: "This launcher build has no CurseForge API key.".into(),
-                    missing_api_key: true,
-                    no_compatible_file: false,
-                })?;
+            let api = curseforge.ok_or_else(|| CatalogProviderError {
+                provider: source,
+                message: "This launcher build has no CurseForge API key.".into(),
+                missing_api_key: true,
+                no_compatible_file: false,
+            })?;
+            let mods_url = api.url("/v1/mods");
             let id = project_id
                 .strip_prefix("curseforge:")
                 .unwrap_or(project_id)
@@ -1041,11 +1030,11 @@ async fn resolve_compatible_mod_file(
                     provider_error(source, format!("Invalid CurseForge project id: {error}"))
                 })?;
             let url = format!(
-                "{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}/files?gameVersion={}&modLoaderType={}&pageSize=50&index=0",
+                "{mods_url}/{id}/files?gameVersion={}&modLoaderType={}&pageSize=50&index=0",
                 encode_query_component(&compatibility.game_version),
                 compatibility.loader.curseforge_id(),
             );
-            let body = request_body(client.clone(), &url, Some(api_key), source).await?;
+            let body = request_body(client.clone(), &url, api.key(), source).await?;
             let response: CurseForgeFilesResponse =
                 serde_json::from_str(&body).map_err(|error| {
                     provider_error(source, format!("Invalid mod files response: {error}"))
@@ -1071,11 +1060,8 @@ async fn resolve_compatible_mod_file(
             let download_url = match file.download_url.filter(|url| !url.trim().is_empty()) {
                 Some(url) => url,
                 None => {
-                    let url = format!(
-                        "{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}/files/{}/download-url",
-                        file.id
-                    );
-                    let body = request_body(client, &url, Some(api_key), source).await?;
+                    let url = format!("{mods_url}/{id}/files/{}/download-url", file.id);
+                    let body = request_body(client, &url, api.key(), source).await?;
                     let response: CurseForgeDownloadUrlResponse = serde_json::from_str(&body)
                         .map_err(|error| {
                             provider_error(
@@ -1116,7 +1102,7 @@ async fn resolve_compatible_content_file(
     source: ModSource,
     kind: ProjectKind,
     game_version: &str,
-    curseforge_api_key: Option<&str>,
+    curseforge: Option<&CurseForgeApi>,
 ) -> Result<ProjectDownloadFile, CatalogProviderError> {
     match source {
         ModSource::Modrinth => {
@@ -1165,14 +1151,13 @@ async fn resolve_compatible_content_file(
             })
         }
         ModSource::CurseForge => {
-            let api_key = curseforge_api_key
-                .filter(|key| !key.trim().is_empty())
-                .ok_or_else(|| CatalogProviderError {
-                    provider: source,
-                    message: "This launcher build has no CurseForge API key.".into(),
-                    missing_api_key: true,
-                    no_compatible_file: false,
-                })?;
+            let api = curseforge.ok_or_else(|| CatalogProviderError {
+                provider: source,
+                message: "This launcher build has no CurseForge API key.".into(),
+                missing_api_key: true,
+                no_compatible_file: false,
+            })?;
+            let mods_url = api.url("/v1/mods");
             let id = project_id
                 .strip_prefix("curseforge:")
                 .unwrap_or(project_id)
@@ -1181,10 +1166,10 @@ async fn resolve_compatible_content_file(
                     provider_error(source, format!("Invalid CurseForge project id: {error}"))
                 })?;
             let url = format!(
-                "{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}/files?gameVersion={}&pageSize=50&index=0",
+                "{mods_url}/{id}/files?gameVersion={}&pageSize=50&index=0",
                 encode_query_component(game_version),
             );
-            let body = request_body(client.clone(), &url, Some(api_key), source).await?;
+            let body = request_body(client.clone(), &url, api.key(), source).await?;
             let response: CurseForgeFilesResponse =
                 serde_json::from_str(&body).map_err(|error| {
                     provider_error(source, format!("Invalid project files response: {error}"))
@@ -1203,11 +1188,8 @@ async fn resolve_compatible_content_file(
             let download_url = match file.download_url.filter(|url| !url.trim().is_empty()) {
                 Some(url) => url,
                 None => {
-                    let url = format!(
-                        "{CURSEFORGE_MOD_DESCRIPTION_URL}/{id}/files/{}/download-url",
-                        file.id
-                    );
-                    let body = request_body(client, &url, Some(api_key), source).await?;
+                    let url = format!("{mods_url}/{id}/files/{}/download-url", file.id);
+                    let body = request_body(client, &url, api.key(), source).await?;
                     let response: CurseForgeDownloadUrlResponse = serde_json::from_str(&body)
                         .map_err(|error| {
                             provider_error(
@@ -1400,7 +1382,7 @@ async fn search_curseforge(
     client: Arc<dyn HttpClient>,
     query: &str,
     sort: ModSort,
-    api_key: Option<String>,
+    curseforge: Option<CurseForgeApi>,
     compatibility_filter: ModSearchFilters,
     kind: ProjectKind,
     offset: usize,
@@ -1418,7 +1400,7 @@ async fn search_curseforge(
         None => None,
     };
 
-    let Some(api_key) = api_key.filter(|key| !key.trim().is_empty()) else {
+    let Some(api) = curseforge else {
         return Err(CatalogProviderError {
             provider: ModSource::CurseForge,
             message: "This launcher build has no CurseForge API key.".into(),
@@ -1427,13 +1409,14 @@ async fn search_curseforge(
         });
     };
 
+    let search_url = api.url("/v1/mods/search");
     let sort_field = match sort {
         ModSort::Popular => 2,
         ModSort::Downloads => 6,
         ModSort::Relevance => 1,
     };
     let mut url = format!(
-        "{CURSEFORGE_SEARCH_URL}?gameId={CURSEFORGE_MINECRAFT_GAME_ID}&classId={}&pageSize={limit}&index={offset}&sortField={sort_field}&sortOrder=desc",
+        "{search_url}?gameId={CURSEFORGE_MINECRAFT_GAME_ID}&classId={}&pageSize={limit}&index={offset}&sortField={sort_field}&sortOrder=desc",
         kind.curseforge_class_id(),
     );
     if let Some(author_id) = author_id {
@@ -1456,8 +1439,8 @@ async fn search_curseforge(
     {
         let body = request_body(
             client.clone(),
-            "https://api.curseforge.com/v1/categories?gameId=432&classId=6",
-            Some(&api_key),
+            &api.url("/v1/categories?gameId=432&classId=6"),
+            api.key(),
             ModSource::CurseForge,
         )
         .await?;
@@ -1489,7 +1472,7 @@ async fn search_curseforge(
         url.push_str(&encode_query_component(query.trim()));
     }
 
-    let body = request_body(client, &url, Some(&api_key), ModSource::CurseForge).await?;
+    let body = request_body(client, &url, api.key(), ModSource::CurseForge).await?;
     let response: CurseForgeSearchResponse = serde_json::from_str(&body).map_err(|error| {
         provider_error(
             ModSource::CurseForge,
