@@ -11,14 +11,13 @@
 ![Windows | Linux](https://img.shields.io/badge/платформа-Windows%20%7C%20Linux-0078D6.svg)
 
 OrbMC — быстрый и нативный лаунчер Minecraft написанный на Rust. Интерфейс построен на
-[GPUI](https://www.gpui.rs/), без Electron, WebView и Node.js. Java требуется только самой игре;
-лаунчер устанавливает нужную версию автоматически.
+[GPUI](https://www.gpui.rs/), без Electron, WebView и Node.js. Java требуется только самой игре.
 
 ## Установка
 
 Загрузите `orbmc.exe` со страницы
 [последнего релиза](https://github.com/Incoderr/OrbMC/releases/latest)
-и запустите его. Установщик не требуется.
+и запустите его.
 
 ## Сборка из исходников
 
