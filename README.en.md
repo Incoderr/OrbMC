@@ -12,11 +12,11 @@
 ![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D6.svg)
 
-OrbMC is a fast, native Minecraft launcher written in Rust. Its interface is built with [GPUI](https://www.gpui.rs/), without Electron, WebView, or Node.js. Java is only required by the game itself; the launcher automatically installs the required version.
+OrbMC is a fast, native Minecraft launcher written in Rust. Its interface is built with [GPUI](https://www.gpui.rs/), without Electron, WebView, or Node.js. Java is only required by the game itself.
 
 ## Installation
 
-Download `orbmc.exe` from the [latest release](https://github.com/Incoderr/OrbMC/releases/latest) and run it. No installer is required.
+Download `orbmc.exe` from the [latest release](https://github.com/Incoderr/OrbMC/releases/latest) and run it.
 
 ## Building from Source
 
