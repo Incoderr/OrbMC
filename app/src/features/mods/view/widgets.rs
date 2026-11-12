@@ -7,11 +7,17 @@ use gpui_kit::*;
 use crate::features::mods::catalog::ModProject;
 use crate::shared::theme::Palette;
 
-pub(crate) fn mod_project_thumbnail(project: &ModProject, size: Pixels) -> AnyElement {
+/// Project icons often have transparent corners, so the tile behind them uses
+/// the neutral control colour of the theme, not a per-provider colour.
+pub(crate) fn mod_project_thumbnail(
+    project: &ModProject,
+    size: Pixels,
+    palette: Palette,
+) -> AnyElement {
     mod_thumbnail_data(
         project.icon,
-        project.icon_background,
-        project.icon_foreground,
+        palette.control,
+        palette.muted,
         project.image_url.as_deref(),
         size,
     )

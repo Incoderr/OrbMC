@@ -75,6 +75,14 @@ pub struct InstanceProfile {
     /// split with `launch::split_arguments` at launch.
     #[serde(default)]
     pub jvm_arguments: String,
+    /// Pinned by the user: listed before the other builds.
+    #[serde(default)]
+    pub favorite: bool,
+    /// File name of the icon the user picked, inside the build data
+    /// directory. Each pick gets a new name so the image cache never shows
+    /// the previous picture. `None` shows the cover or the loader icon.
+    #[serde(default)]
+    pub custom_icon: Option<String>,
 }
 
 impl InstanceProfile {
@@ -100,7 +108,15 @@ impl InstanceProfile {
             modpack_icon: None,
             play_time_secs: 0,
             jvm_arguments: String::new(),
+            favorite: false,
+            custom_icon: None,
         }
+    }
+
+    /// Picked icon file of this build, if any.
+    pub fn custom_icon_path(&self) -> Option<PathBuf> {
+        let name = self.custom_icon.as_deref()?;
+        Some(self.data_directory().ok()?.join(name))
     }
 
     /// Directory Minecraft runs in for this build.

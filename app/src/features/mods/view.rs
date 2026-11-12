@@ -371,7 +371,8 @@ impl CatalogView {
             let _ = this.update(cx, |this, cx| {
                 this.mods.installed.finish_install(&project_id);
                 this.instances.update(cx, |instances, cx| match result {
-                    Ok(target) => {
+                    Ok(installed) => {
+                        let target = installed.target;
                         instances.set_game(
                             id,
                             target.game_version,
@@ -384,6 +385,11 @@ impl CatalogView {
                     Err(error) => {
                         tracing::warn!(profile_id = %id, %error, "modpack install failed");
                         instances.mark_content_download_failed(id, error.to_string());
+                        // A cancelled pack leaves a half-filled build nobody
+                        // asked to keep.
+                        if error.is_cancelled() {
+                            instances.start_removal(id, cx);
+                        }
                     }
                 });
                 cx.notify();

@@ -100,7 +100,7 @@ core / platform / vendor crates
 | `instances` | builds: model, disk layout and migration, runtime state, worker threads, build screens and dialogs | `InstancesState` (+ `InstanceEvent`), `InstancesView` (+ `InstancesViewEvent`) |
 | `mods` | content catalog, project pages, installs into builds, installed-mods index and scans, translation | `CatalogView` (+ `CatalogEvent`) |
 | `versions` | version/loader catalogs, "Add Minecraft" dialog | `VersionPicker` (+ `CreateProfile`) |
-| `modpacks` | installing Modrinth `.mrpack` packs as new builds (index parsing is in `core::minecraft::mrpack`) | `install_pack`, `ModpackError` |
+| `modpacks` | installing Modrinth `.mrpack` and CurseForge `.zip` packs as new builds, from the catalog or imported from a file ("Импорт" on the builds page); CurseForge files that may not be downloaded outside its app are reported for manual download. Export to `.mrpack`/CurseForge works but is hidden (`EXPORT_ENABLED = false`). Index and manifest parsing/writing are in `core::minecraft::{mrpack, curseforge_pack, pack_export}` | `install_pack`, `import_pack`, `read_pack_header`, `ModpackError`, `export_pack` |
 | `settings` | launcher settings, `settings.json`, settings page | `SettingsState`, `SettingsView` |
 | `skins` | skin library and 3D preview; shows the Ely.by skin of the playing account and sends library skins to the Ely.by upload page (Ely.by has no upload API). Offline mode sends no skin to the game | `SkinsView` |
 | `auth` | account menu: offline name or Ely.by accounts (sign-in, token refresh, authlib-injector) | `AuthState`, `AccountView`, `PlayerAccount` |
@@ -188,7 +188,7 @@ These are the conventions the code already follows. Use them for new work.
   `(1)`, `(2)` suffixes for duplicates (`platform::instance_layout`). It holds
   **only files the game uses**.
 - Launcher bookkeeping for a build lives in `instance-data/<id>/`: mod index
-  `mods.json`, `mod-icons/`, `game-cache/` (usercache,
+  `mods.json`, `mod-icons/`, `icon-*.png` (picked build icon), `game-cache/` (usercache,
   usernamecache — moved in before launch, out after exit), `jvm-logs/`.
 - Identity is the typed id (`InstanceId`, `SkinId`), never a path or a name.
 - Writes of important files are atomic (`profile_store::write_json_atomically`).

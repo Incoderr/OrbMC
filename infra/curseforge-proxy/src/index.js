@@ -5,7 +5,7 @@
 const UPSTREAM = "https://api.curseforge.com";
 const MINECRAFT = "432";
 
-// Only what `app/src/features/mods` sends. Everything else is 403.
+// Only what `app/src/features/mods` and `modpacks` send. Everything else is 403.
 const ROUTES = [
   { method: "GET", path: /^\/v1\/mods\/search$/, ttl: 300 },
   { method: "GET", path: /^\/v1\/categories$/, ttl: 86400 },
@@ -14,6 +14,7 @@ const ROUTES = [
   { method: "GET", path: /^\/v1\/mods\/\d+\/files$/, ttl: 300 },
   { method: "GET", path: /^\/v1\/mods\/\d+\/files\/\d+\/download-url$/, ttl: 3600 },
   { method: "POST", path: /^\/v1\/mods$/, ttl: 0, body: "modIds" },
+  { method: "POST", path: /^\/v1\/mods\/files$/, ttl: 0, body: "fileIds" },
   { method: "POST", path: new RegExp(`^/v1/fingerprints/${MINECRAFT}$`), ttl: 0, body: "fingerprints" },
 ];
 

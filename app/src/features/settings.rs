@@ -39,6 +39,32 @@ pub struct SavedLauncherSettings {
     pub auto_update: bool,
     /// Whether the navigation sidebar was left collapsed.
     pub sidebar_collapsed: bool,
+    /// How builds are shown: `list` or `grid`.
+    pub builds_layout: String,
+}
+
+/// How build cards are laid out on the home and builds pages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BuildsLayout {
+    #[default]
+    List,
+    Grid,
+}
+
+impl BuildsLayout {
+    fn tag(self) -> &'static str {
+        match self {
+            BuildsLayout::List => "list",
+            BuildsLayout::Grid => "grid",
+        }
+    }
+
+    fn from_tag(tag: &str) -> Self {
+        match tag {
+            "grid" => BuildsLayout::Grid,
+            _ => BuildsLayout::List,
+        }
+    }
 }
 
 impl Default for SavedLauncherSettings {
@@ -54,6 +80,7 @@ impl Default for SavedLauncherSettings {
             translate_descriptions: true,
             auto_update: true,
             sidebar_collapsed: false,
+            builds_layout: BuildsLayout::List.tag().to_owned(),
         }
     }
 }
@@ -71,6 +98,7 @@ pub struct SettingsState {
     translate_descriptions: bool,
     auto_update: bool,
     sidebar_collapsed: bool,
+    builds_layout: BuildsLayout,
 }
 
 impl SettingsState {
@@ -116,6 +144,7 @@ impl SettingsState {
             translate_descriptions: saved.translate_descriptions,
             auto_update: saved.auto_update,
             sidebar_collapsed: saved.sidebar_collapsed,
+            builds_layout: BuildsLayout::from_tag(&saved.builds_layout),
             offline_player: String::new(),
         };
         if is_valid_player_name(&saved.offline_player) {
@@ -152,6 +181,7 @@ impl SettingsState {
             translate_descriptions: self.translate_descriptions,
             auto_update: self.auto_update,
             sidebar_collapsed: self.sidebar_collapsed,
+            builds_layout: self.builds_layout.tag().to_owned(),
         };
         if let Err(error) = profile_store::save_settings(&saved) {
             tracing::error!(%error, "failed to persist launcher settings");
@@ -165,6 +195,14 @@ impl SettingsState {
 
     pub fn sidebar_collapsed(&self) -> bool {
         self.sidebar_collapsed
+    }
+
+    pub fn builds_layout(&self) -> BuildsLayout {
+        self.builds_layout
+    }
+
+    pub fn set_builds_layout(&mut self, layout: BuildsLayout) {
+        self.builds_layout = layout;
     }
 
     pub fn toggle_sidebar(&mut self) {

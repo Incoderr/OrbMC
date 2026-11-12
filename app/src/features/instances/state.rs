@@ -86,6 +86,16 @@ impl InstanceRuntime {
     }
 }
 
+/// Rename of a build's game directory, planned by `directory_move`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryMove {
+    pub id: InstanceId,
+    pub from: PathBuf,
+    pub to: PathBuf,
+    /// New directory name under `<installation_root>/instances`.
+    pub directory: String,
+}
+
 #[derive(Debug, Default)]
 pub struct InstancesState {
     pub(super) profiles: Vec<InstanceProfile>,
@@ -182,7 +192,19 @@ impl InstancesState {
 
     pub fn recent_profiles(&self) -> Vec<&InstanceProfile> {
         let mut profiles: Vec<_> = self.profiles.iter().collect();
-        profiles.sort_by_key(|profile| std::cmp::Reverse(profile.last_launch_order));
+        profiles.sort_by_key(|profile| {
+            (
+                std::cmp::Reverse(profile.favorite),
+                std::cmp::Reverse(profile.last_launch_order),
+            )
+        });
+        profiles
+    }
+
+    /// Builds in creation order with the favorites first.
+    pub fn favorites_first(&self) -> Vec<&InstanceProfile> {
+        let mut profiles: Vec<_> = self.profiles.iter().collect();
+        profiles.sort_by_key(|profile| std::cmp::Reverse(profile.favorite));
         profiles
     }
 
@@ -243,7 +265,27 @@ impl InstancesState {
                 InstanceRuntime::DownloadingMod { transfer, .. }
                 | InstanceRuntime::DownloadingContent { transfer, .. },
             ) => {
+                // Cancelling also ends a pause, so its time stays out of the speed.
                 transfer.cancel();
+                transfer.resume();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Pauses or resumes a mod or pack download; `false` when none runs.
+    pub fn set_transfer_paused(&mut self, id: InstanceId, paused: bool) -> bool {
+        match self.runtime.get(&id) {
+            Some(
+                InstanceRuntime::DownloadingMod { transfer, .. }
+                | InstanceRuntime::DownloadingContent { transfer, .. },
+            ) => {
+                if paused {
+                    transfer.pause();
+                } else {
+                    transfer.resume();
+                }
                 true
             }
             _ => false,
@@ -505,6 +547,62 @@ impl InstancesState {
         }
     }
 
+    /// Renames a build. Blank names are ignored. The game directory follows
+    /// the name through `directory_move`, done off the UI thread.
+    pub fn set_name(&mut self, id: InstanceId, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        if let Some(profile) = self.profiles.iter_mut().find(|profile| profile.id == id) {
+            profile.name = name.to_owned();
+        }
+    }
+
+    /// Folder move that brings the game directory of a build in line with
+    /// its name. `None` when the folder already matches (case aside: Windows
+    /// would see the same folder) or the build is busy, e.g. the game runs
+    /// from it.
+    pub fn directory_move(&self, id: InstanceId) -> Option<DirectoryMove> {
+        let profile = self.profile(id)?;
+        if self.runtime(&id).is_busy() {
+            return None;
+        }
+        let wanted = crate::platform::instance_layout::sanitize_directory_name(&profile.name);
+        if wanted.to_lowercase() == profile.directory.to_lowercase() {
+            return None;
+        }
+        let directory = allocate_directory(&self.profiles, profile);
+        Some(DirectoryMove {
+            id,
+            from: profile.game_directory(),
+            to: crate::platform::instance_layout::game_directory(
+                &profile.installation_root,
+                &directory,
+            ),
+            directory,
+        })
+    }
+
+    /// Records a finished `directory_move`.
+    pub fn set_directory(&mut self, id: InstanceId, directory: String) {
+        if let Some(profile) = self.profiles.iter_mut().find(|profile| profile.id == id) {
+            profile.directory = directory;
+        }
+    }
+
+    /// Sets the picked icon file; returns the one it replaces.
+    pub fn set_custom_icon(&mut self, id: InstanceId, icon: Option<String>) -> Option<String> {
+        let profile = self.profiles.iter_mut().find(|profile| profile.id == id)?;
+        std::mem::replace(&mut profile.custom_icon, icon)
+    }
+
+    pub fn set_favorite(&mut self, id: InstanceId, favorite: bool) {
+        if let Some(profile) = self.profiles.iter_mut().find(|profile| profile.id == id) {
+            profile.favorite = favorite;
+        }
+    }
+
     pub fn set_jvm_arguments(&mut self, id: InstanceId, arguments: String) {
         if let Some(profile) = self.profiles.iter_mut().find(|profile| profile.id == id) {
             profile.jvm_arguments = arguments.trim().to_owned();
@@ -635,6 +733,46 @@ mod tests {
     use crate::features::versions::LoaderChoice;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn rename_ignores_blank_names_and_favorites_come_first() {
+        let mut state = InstancesState::from_profiles(vec![profile("First"), profile("Second")]);
+        let second = state.profiles()[1].id;
+
+        state.set_name(second, "  Renamed  ");
+        assert_eq!(state.profile(second).unwrap().name, "Renamed");
+        state.set_name(second, "   ");
+        assert_eq!(state.profile(second).unwrap().name, "Renamed");
+
+        state.set_favorite(second, true);
+        assert_eq!(state.favorites_first()[0].id, second);
+        assert_eq!(state.recent_profiles()[0].id, second);
+    }
+
+    #[test]
+    fn rename_moves_the_folder_unless_busy_or_only_case_changed() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let mut build = profile("Old");
+        build.installation_root = root.path().to_path_buf();
+        build.directory = "Old".into();
+        let mut other = profile("Taken");
+        other.installation_root = root.path().to_path_buf();
+        other.directory = "New".into();
+        let mut state = InstancesState::from_profiles(vec![build, other]);
+        let id = state.profiles()[0].id;
+
+        state.set_name(id, "OLD");
+        assert_eq!(state.directory_move(id), None);
+
+        state.set_name(id, "New");
+        let planned = state.directory_move(id).expect("folder follows the name");
+        assert_eq!(planned.directory, "New (1)");
+        assert_eq!(planned.from, root.path().join("instances").join("Old"));
+        assert_eq!(planned.to, root.path().join("instances").join("New (1)"));
+
+        state.mark_running(id, 1);
+        assert_eq!(state.directory_move(id), None);
+    }
 
     fn profile(name: &str) -> InstanceProfile {
         InstanceProfile::new(

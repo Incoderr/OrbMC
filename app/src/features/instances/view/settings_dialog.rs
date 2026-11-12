@@ -1,10 +1,13 @@
 use super::InstancesView;
 use crate::features::settings::*;
 use crate::shared::ui::field_label;
+use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::slider::{Slider, SliderState};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 impl InstancesView {
@@ -32,6 +35,11 @@ impl InstancesView {
                 .placeholder("-XX:+UseG1GC -Dfile.encoding=UTF-8")
                 .default_value(profile.jvm_arguments.clone())
         });
+        let name_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(locale.text("Название сборки", "Profile name"))
+                .default_value(profile.name.clone())
+        });
         let title = format!(
             "{} · {profile_name}",
             locale.text("Настройки сборки", "Profile settings")
@@ -41,6 +49,7 @@ impl InstancesView {
             let content_owner = owner.clone();
             let content_slider = memory_slider.clone();
             let content_jvm_input = jvm_input.clone();
+            let content_name_input = name_input.clone();
             dialog
                 .w(px(520.))
                 .title(title.clone())
@@ -66,6 +75,11 @@ impl InstancesView {
                     let save_owner = content_owner.clone();
                     let save_slider = content_slider.clone();
                     let save_jvm_input = content_jvm_input.clone();
+                    let save_name_input = content_name_input.clone();
+                    let favorite_owner = content_owner.clone();
+                    let favorite = current_profile
+                        .as_ref()
+                        .is_some_and(|profile| profile.favorite);
 
                     content.child(
                         div()
@@ -74,6 +88,124 @@ impl InstancesView {
                             .gap_4()
                             .p_4()
                             .text_color(rgb(palette.foreground))
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap_2()
+                                    .child(field_label(locale.text("Название", "Name")))
+                                    .child(Input::new(&content_name_input)),
+                            )
+                            .when_some(current_profile.as_ref(), |column, profile| {
+                                let pick_owner = content_owner.clone();
+                                let reset_owner = content_owner.clone();
+                                let has_custom = profile.custom_icon.is_some();
+                                column.child(
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .child(super::widgets::build_icon(profile, px(44.)))
+                                        .child(
+                                            div()
+                                                .v_flex()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .gap_1()
+                                                .child(field_label(locale.text("Иконка", "Icon")))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(rgb(palette.muted))
+                                                        .child(locale.text(
+                                                            "PNG, JPG или WebP, обрежется до квадрата.",
+                                                            "PNG, JPG or WebP, cropped to a square.",
+                                                        )),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .h_flex()
+                                                .flex_none()
+                                                .gap_2()
+                                                .child(icon_button(
+                                                    format!("profile-icon-pick-{id}"),
+                                                    IconName::FolderOpen,
+                                                    locale.text("Выбрать", "Choose"),
+                                                    palette,
+                                                    move |cx| {
+                                                        if let Some(owner) = pick_owner.upgrade() {
+                                                            owner.update(cx, |this, cx| {
+                                                                this.choose_build_icon(id, cx);
+                                                            });
+                                                        }
+                                                    },
+                                                ))
+                                                .when(has_custom, |row| {
+                                                    row.child(icon_button(
+                                                        format!("profile-icon-reset-{id}"),
+                                                        IconName::Undo2,
+                                                        locale.text("Сбросить", "Reset"),
+                                                        palette,
+                                                        move |cx| {
+                                                            if let Some(owner) =
+                                                                reset_owner.upgrade()
+                                                            {
+                                                                owner.update(cx, |this, cx| {
+                                                                    this.reset_build_icon(id, cx);
+                                                                });
+                                                            }
+                                                        },
+                                                    ))
+                                                }),
+                                        ),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_3()
+                                    .child(
+                                        div()
+                                            .v_flex()
+                                            .gap_1()
+                                            .child(field_label(
+                                                locale.text("В избранном", "Favorite"),
+                                            ))
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(rgb(palette.muted))
+                                                    .child(locale.text(
+                                                        "Избранные сборки показываются первыми.",
+                                                        "Favorite profiles are listed first.",
+                                                    )),
+                                            ),
+                                    )
+                                    .child(
+                                        Switch::new(format!("profile-favorite-{id}"))
+                                            .checked(favorite)
+                                            .color(rgb(palette.accent))
+                                            .accessibility_label(
+                                                locale.text("В избранном", "Favorite"),
+                                            )
+                                            .on_change(move |checked, _, cx| {
+                                                let Some(owner) = favorite_owner.upgrade() else {
+                                                    return;
+                                                };
+                                                owner.update(cx, |this, cx| {
+                                                    this.instances.update(cx, |instances, cx| {
+                                                        instances.set_favorite(id, *checked);
+                                                        cx.notify();
+                                                    });
+                                                    this.instances.read(cx).save();
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    ),
+                            )
+                            .child(div().h(px(1.)).w_full().bg(rgb(palette.border)))
                             .child(
                                 div()
                                     .v_flex()
@@ -236,13 +368,17 @@ impl InstancesView {
                                             save_slider.read(cx).value().end().round() as u32;
                                         let jvm_arguments =
                                             save_jvm_input.read(cx).value().to_string();
+                                        let name = save_name_input.read(cx).value().to_string();
                                         if let Some(owner) = save_owner.upgrade() {
                                             owner.update(cx, |this, cx| {
-                                                this.instances.update(cx, |instances, _| {
+                                                this.instances.update(cx, |instances, cx| {
+                                                    instances.set_name(id, &name);
                                                     instances.set_memory_mb(id, memory_mb);
                                                     instances.set_jvm_arguments(id, jvm_arguments);
+                                                    cx.notify();
                                                 });
                                                 this.instances.read(cx).save();
+                                                this.move_build_directory(id, cx);
                                                 cx.notify();
                                             });
                                             window.close_dialog(cx);
@@ -334,4 +470,33 @@ impl InstancesView {
                 })
         });
     }
+}
+
+/// Small button of the icon row: icon and label on one line.
+fn icon_button(
+    id: String,
+    icon: IconName,
+    label: &'static str,
+    palette: crate::shared::theme::Palette,
+    on_click: impl Fn(&mut App) + 'static,
+) -> impl IntoElement {
+    UiButton::new(id)
+        .cursor_pointer()
+        .h(px(32.))
+        .px_3()
+        .rounded(px(8.))
+        .bg(rgb(palette.control))
+        .text_color(rgb(palette.foreground))
+        .hover(move |style| style.bg(rgb(palette.hover)))
+        .on_click(move |_, _, cx| on_click(cx))
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1p5()
+                .text_size(px(13.))
+                .whitespace_nowrap()
+                .child(icon)
+                .child(label),
+        )
 }

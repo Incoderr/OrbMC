@@ -1202,7 +1202,7 @@ impl CatalogView {
                     .min_w_0()
                     .items_center()
                     .gap_3()
-                    .child(mod_project_thumbnail(project, px(56.)))
+                    .child(mod_project_thumbnail(project, px(56.), palette))
                     .child(
                         div()
                             .v_flex()

@@ -1,7 +1,9 @@
 //! Progress and size labels of build cards.
 
+use crate::features::instances::InstanceProfile;
 pub(crate) use crate::features::mods::view::widgets::mod_icon_placeholder;
 use crate::features::settings::*;
+use crate::features::versions::LoaderChoice;
 use crate::shared::theme::Palette;
 use gpui_kit::*;
 
@@ -46,6 +48,22 @@ pub(crate) fn format_play_time(time: std::time::Duration, locale: Locale) -> Str
 }
 
 /// Maps vendor install stage names to localized labels.
+/// How long ago something happened, in whole units: "5 мин назад".
+pub(crate) fn format_ago(elapsed: std::time::Duration, locale: Locale) -> String {
+    let minutes = elapsed.as_secs() / 60;
+    let hours = minutes / 60;
+    let days = hours / 24;
+    if minutes == 0 {
+        locale.text("только что", "just now").to_owned()
+    } else if hours == 0 {
+        format!("{minutes} {}", locale.text("мин назад", "min ago"))
+    } else if days == 0 {
+        format!("{hours} {}", locale.text("ч назад", "h ago"))
+    } else {
+        format!("{days} {}", locale.text("дн. назад", "d ago"))
+    }
+}
+
 pub(crate) fn stage_label(stage: &str, locale: Locale) -> &str {
     match stage {
         "Queued" => locale.text("В очереди", "Queued"),
@@ -109,9 +127,79 @@ pub(crate) fn install_progress_view(
     )
 }
 
+/// Square cover of a build: the icon the user picked, else the modpack
+/// cover, else the icon of its loader.
+pub(crate) fn build_icon(profile: &InstanceProfile, size: Pixels) -> AnyElement {
+    let loader = profile.loader;
+    // GPUI does not clip images to a parent's corners, so the image itself
+    // is rounded; the radius grows with the size like an app icon.
+    let radius = size * 0.22;
+    let fallback = move || {
+        img(loader_icon(loader))
+            .size_full()
+            .rounded(radius)
+            .object_fit(ObjectFit::Cover)
+            .into_any_element()
+    };
+    let source: ImageSource = match (profile.custom_icon_path(), &profile.modpack_icon) {
+        (Some(path), _) => path.into(),
+        (None, Some(url)) => url.clone().into(),
+        (None, None) => loader_icon(loader).into(),
+    };
+    div()
+        .flex_none()
+        .w(size)
+        .h(size)
+        .rounded(radius)
+        .overflow_hidden()
+        .child(
+            img(source)
+                .size_full()
+                .rounded(radius)
+                .object_fit(ObjectFit::Cover)
+                .with_loading(fallback)
+                .with_fallback(fallback),
+        )
+        .into_any_element()
+}
+
+/// Built-in icon of a loader (`assets/build-icons`).
+fn loader_icon(loader: LoaderChoice) -> std::sync::Arc<Image> {
+    use std::sync::{Arc, LazyLock};
+    static VANILLA: LazyLock<Arc<Image>> = LazyLock::new(|| {
+        png(include_bytes!(
+            "../../../../../assets/build-icons/vanilla.png"
+        ))
+    });
+    static FABRIC: LazyLock<Arc<Image>> = LazyLock::new(|| {
+        png(include_bytes!(
+            "../../../../../assets/build-icons/fabric.png"
+        ))
+    });
+    static FORGE: LazyLock<Arc<Image>> = LazyLock::new(|| {
+        png(include_bytes!(
+            "../../../../../assets/build-icons/forge.png"
+        ))
+    });
+    static NEOFORGE: LazyLock<Arc<Image>> = LazyLock::new(|| {
+        png(include_bytes!(
+            "../../../../../assets/build-icons/neoforge.png"
+        ))
+    });
+    fn png(bytes: &[u8]) -> Arc<Image> {
+        Arc::new(Image::from_bytes(ImageFormat::Png, bytes.to_vec()))
+    }
+    match loader {
+        LoaderChoice::Vanilla => VANILLA.clone(),
+        LoaderChoice::Fabric => FABRIC.clone(),
+        LoaderChoice::Forge => FORGE.clone(),
+        LoaderChoice::NeoForge => NEOFORGE.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_play_time, format_speed};
+    use super::{format_ago, format_play_time, format_speed};
     use crate::features::settings::Locale;
     use std::time::Duration;
 
@@ -136,5 +224,14 @@ mod tests {
             format_play_time(Duration::from_secs(100 * 3600 + 60), Locale::En),
             "100 h 1 min"
         );
+    }
+
+    #[test]
+    fn ago_labels_pick_the_largest_whole_unit() {
+        let ago = |secs| format_ago(Duration::from_secs(secs), Locale::Ru);
+        assert_eq!(ago(20), "только что");
+        assert_eq!(ago(5 * 60 + 10), "5 мин назад");
+        assert_eq!(ago(3 * 3600), "3 ч назад");
+        assert_eq!(ago(2 * 86_400 + 5), "2 дн. назад");
     }
 }

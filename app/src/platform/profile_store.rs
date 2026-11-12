@@ -49,8 +49,37 @@ pub fn save_settings<T: Serialize>(settings: &T) -> std::io::Result<()> {
     write_json_atomically(&settings_path()?, settings)
 }
 
+/// Downloads folder for a launcher without settings: the one picked in the
+/// installer, otherwise the data directory.
 pub fn default_download_directory() -> std::io::Result<PathBuf> {
+    if let Some(chosen) = installer_download_directory() {
+        return Ok(chosen);
+    }
     data_directory()
+}
+
+/// Written next to `orbmc.exe` by `installer/orbmc.iss`.
+const INSTALLER_DOWNLOAD_DIR_FILE: &str = "download-dir.txt";
+
+fn installer_download_directory() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let text =
+        std::fs::read_to_string(executable.parent()?.join(INSTALLER_DOWNLOAD_DIR_FILE)).ok()?;
+    let path = parse_download_directory(&text)?;
+    // A drive that is gone (unplugged, renamed) falls back to the default.
+    match std::fs::create_dir_all(&path) {
+        Ok(()) => Some(path),
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "installer downloads folder is unavailable");
+            None
+        }
+    }
+}
+
+fn parse_download_directory(text: &str) -> Option<PathBuf> {
+    let line = text.trim_start_matches('\u{feff}').lines().next()?.trim();
+    let path = PathBuf::from(line);
+    path.is_absolute().then_some(path)
 }
 
 pub fn shared_game_directory(download_directory: &Path) -> PathBuf {
@@ -120,4 +149,21 @@ pub(crate) fn data_directory() -> std::io::Result<PathBuf> {
         std::fs::rename(&legacy, &directory)?;
     }
     Ok(directory)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_download_directory;
+
+    #[test]
+    fn installer_file_with_bom_and_newline() {
+        let parsed = parse_download_directory("\u{feff}E:\\Игры\\OrbMC\r\n");
+        assert_eq!(parsed, Some(std::path::PathBuf::from("E:\\Игры\\OrbMC")));
+    }
+
+    #[test]
+    fn relative_or_empty_paths_are_ignored() {
+        assert_eq!(parse_download_directory(""), None);
+        assert_eq!(parse_download_directory("OrbMC"), None);
+    }
 }

@@ -2,6 +2,7 @@
 //! runtime state, the worker threads behind them and their screens.
 
 pub mod game_log;
+mod icon;
 mod layout;
 mod model;
 mod service;

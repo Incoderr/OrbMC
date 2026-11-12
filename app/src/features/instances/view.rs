@@ -1,8 +1,10 @@
 //! Build screens: the home page, the build list and a build's own page,
-//! with their dialogs (build settings, deletion, world picker).
+//! with their dialogs (build settings, deletion, world picker, export, pack import).
 
 mod builds_page;
+mod export_dialog;
 mod home_page;
+mod pack_import;
 mod settings_dialog;
 pub(crate) mod widgets;
 mod world_picker;
@@ -60,8 +62,15 @@ pub struct InstancesView {
     /// Offline player name; used when no Ely.by account is selected.
     player_name: String,
     auth: Entity<AuthState>,
-    _subscriptions: [Subscription; 3],
+    settings: Entity<SettingsState>,
+    builds_layout: crate::features::settings::BuildsLayout,
+    /// Last played worlds for the home page, newest first.
+    recent_worlds: Vec<crate::features::worlds::RecentWorld>,
+    _subscriptions: [Subscription; 4],
 }
+
+/// Worlds shown under "Continue playing".
+const RECENT_WORLDS: usize = 3;
 
 impl EventEmitter<InstancesViewEvent> for InstancesView {}
 
@@ -73,12 +82,13 @@ impl InstancesView {
         auth: Entity<AuthState>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (palette, locale, player_name) = {
+        let (palette, locale, player_name, builds_layout) = {
             let settings = settings.read(cx);
             (
                 settings.palette(),
                 settings.locale(),
                 settings.offline_player().to_owned(),
+                settings.builds_layout(),
             )
         };
         let subscriptions = [
@@ -87,6 +97,7 @@ impl InstancesView {
                 this.palette = settings.palette();
                 this.locale = settings.locale();
                 this.player_name = settings.offline_player().to_owned();
+                this.builds_layout = settings.builds_layout();
                 cx.notify();
             }),
             cx.observe(&instances, |this, _, cx| {
@@ -95,8 +106,17 @@ impl InstancesView {
             }),
             // Installed-mod lists and scan states of a build page.
             cx.observe(&catalog, |_, _, cx| cx.notify()),
+            // A finished session changed the play time of its worlds.
+            cx.subscribe(&instances, |this, _, event, cx| {
+                if matches!(
+                    event,
+                    super::InstanceEvent::GameExited(_) | super::InstanceEvent::Removed(_)
+                ) {
+                    this.refresh_recent_worlds(cx);
+                }
+            }),
         ];
-        Self {
+        let mut view = Self {
             auth,
             instances,
             details_tab: DetailsTab::default(),
@@ -108,12 +128,49 @@ impl InstancesView {
             palette,
             locale,
             player_name,
+            settings: settings.clone(),
+            builds_layout,
+            recent_worlds: Vec::new(),
             _subscriptions: subscriptions,
-        }
+        };
+        view.refresh_recent_worlds(cx);
+        view
+    }
+
+    /// Switches between build rows and tiles and remembers the choice.
+    pub(crate) fn set_builds_layout(
+        &mut self,
+        layout: crate::features::settings::BuildsLayout,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.update(cx, |settings, cx| {
+            settings.set_builds_layout(layout);
+            cx.notify();
+        });
+        self.settings.read(cx).save();
+    }
+
+    /// Rereads the last played worlds of all builds off the UI thread.
+    fn refresh_recent_worlds(&mut self, cx: &mut Context<Self>) {
+        let profiles = self.instances.read(cx).profiles().to_vec();
+        let task = cx
+            .background_executor()
+            .spawn(async move { crate::features::worlds::recent(&profiles, RECENT_WORLDS) });
+        cx.spawn(async move |this, cx| {
+            let worlds = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.recent_worlds = worlds;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn show(&mut self, screen: BuildsScreen, cx: &mut Context<Self>) {
         if self.screen != screen {
+            if screen == BuildsScreen::Home {
+                self.refresh_recent_worlds(cx);
+            }
             self.screen = screen;
             self.details_tab = DetailsTab::Mods;
             cx.notify();
@@ -247,6 +304,141 @@ impl InstancesView {
             instances.save();
         });
         cx.notify();
+    }
+
+    /// Lets the user pick a picture for a build; it is stored as a square
+    /// PNG copy in the build data directory.
+    pub(crate) fn choose_build_icon(&mut self, id: InstanceId, cx: &mut Context<Self>) {
+        let Some(data_directory) = self
+            .instances
+            .read(cx)
+            .profile(id)
+            .and_then(|profile| profile.data_directory().ok())
+        else {
+            return;
+        };
+        let locale = self.locale;
+        let title = locale.text(
+            "Выбери картинку для сборки",
+            "Choose a picture for the build",
+        );
+        let filter = crate::platform::file_dialog::FileFilter {
+            name: locale.text("Картинки (PNG, JPG, WebP)", "Pictures (PNG, JPG, WebP)"),
+            extensions: super::icon::EXTENSIONS,
+        };
+        let native = crate::platform::file_dialog::pick_file(title, filter);
+        // Without a filtered system dialog GPUI's picker is used and the
+        // extension is checked after the pick.
+        let fallback = native.is_none().then(|| {
+            cx.prompt_for_paths(PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: false,
+                prompt: Some(title.into()),
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let source = if let Some(native) = native {
+                native.await
+            } else if let Some(fallback) = fallback {
+                match fallback.await {
+                    Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                    Ok(Ok(None)) => None,
+                    Ok(Err(error)) => {
+                        tracing::warn!(%error, "failed to open icon file picker");
+                        None
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "icon file picker response channel closed");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let Some(source) = source.filter(|path| path.is_file() && filter.matches(path)) else {
+                return;
+            };
+            let stored = {
+                let data_directory = data_directory.clone();
+                cx.background_executor()
+                    .spawn(async move { super::icon::store(&data_directory, &source) })
+                    .await
+            };
+            let name = match stored {
+                Ok(name) => name,
+                Err(error) => {
+                    tracing::warn!(profile_id = %id, %error, "failed to store build icon");
+                    return;
+                }
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.replace_build_icon(id, Some(name), cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Goes back to the modpack cover or the loader icon.
+    pub(crate) fn reset_build_icon(&mut self, id: InstanceId, cx: &mut Context<Self>) {
+        self.replace_build_icon(id, None, cx);
+    }
+
+    fn replace_build_icon(&mut self, id: InstanceId, icon: Option<String>, cx: &mut Context<Self>) {
+        let (previous, data_directory) = self.instances.update(cx, |instances, cx| {
+            let previous = instances.set_custom_icon(id, icon);
+            instances.save();
+            cx.notify();
+            let data_directory = instances
+                .profile(id)
+                .and_then(|profile| profile.data_directory().ok());
+            (previous, data_directory)
+        });
+        if let (Some(previous), Some(data_directory)) = (previous, data_directory) {
+            cx.background_executor()
+                .spawn(async move { super::icon::remove(&data_directory, &previous) })
+                .detach();
+        }
+        cx.notify();
+    }
+
+    /// Renames the game directory of a build after its name changed. The
+    /// build keeps its old folder when the move fails (open files, rights).
+    pub(crate) fn move_build_directory(&mut self, id: InstanceId, cx: &mut Context<Self>) {
+        let Some(planned) = self.instances.read(cx).directory_move(id) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = {
+                let (from, to) = (planned.from.clone(), planned.to.clone());
+                cx.background_executor()
+                    .spawn(async move {
+                        if from.exists() {
+                            crate::platform::instance_layout::move_directory(&from, &to)
+                        } else {
+                            // Not installed yet: the new name is simply used.
+                            Ok(())
+                        }
+                    })
+                    .await
+            };
+            match result {
+                Ok(()) => {
+                    tracing::info!(profile_id = %id, directory = %planned.directory, "renamed build directory");
+                    let _ = this.update(cx, |this, cx| {
+                        this.instances.update(cx, |instances, cx| {
+                            instances.set_directory(id, planned.directory);
+                            instances.save();
+                            cx.notify();
+                        });
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(profile_id = %id, %error, "failed to rename build directory");
+                }
+            }
+        })
+        .detach();
     }
 }
 

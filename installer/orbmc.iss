@@ -77,10 +77,51 @@ Filename: "{app}\orbmc.exe"; Description: "{cm:LaunchProgram,OrbMC}"; Flags: now
 Type: files; Name: "{app}\orbmc.old.exe"
 Type: files; Name: "{app}\orbmc.update.exe"
 
+[UninstallDelete]
+Type: files; Name: "{app}\download-dir.txt"
+
 [Code]
 const
   // Held by the running launcher (platform::single_instance).
   LauncherMutex = 'Local\OrbMC.SingleInstance';
+  // Read by the launcher on first start (platform::profile_store).
+  DownloadDirFile = 'download-dir.txt';
+
+var
+  DownloadDirPage: TInputDirWizardPage;
+
+// Existing settings already name a downloads folder; the launcher would
+// ignore the installer's choice, so the page is not shown.
+function HasLauncherSettings(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{localappdata}\OrbMC\settings.json'));
+end;
+
+procedure InitializeWizard();
+begin
+  DownloadDirPage := CreateInputDirPage(wpSelectDir,
+    CustomMessage('DownloadDirCaption'), CustomMessage('DownloadDirDescription'),
+    CustomMessage('DownloadDirPrompt'), False, '');
+  DownloadDirPage.Add('');
+  DownloadDirPage.Values[0] := ExpandConstant('{localappdata}\OrbMC');
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = DownloadDirPage.ID) and HasLauncherSettings();
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Lines: TArrayOfString;
+begin
+  if (CurStep = ssPostInstall) and not WizardSilent() and not HasLauncherSettings() then
+  begin
+    SetArrayLength(Lines, 1);
+    Lines[0] := DownloadDirPage.Values[0];
+    SaveStringsToUTF8File(ExpandConstant('{app}\') + DownloadDirFile, Lines, False);
+  end;
+end;
 
 function ShouldLaunch(): Boolean;
 begin
@@ -114,3 +155,9 @@ end;
 [CustomMessages]
 ru.CloseLauncher=OrbMC сейчас запущен. Закрой лаунчер (и в трее тоже) и нажми «Повтор».
 en.CloseLauncher=OrbMC is running. Close the launcher (the tray one too) and press Retry.
+ru.DownloadDirCaption=Папка для сборок
+en.DownloadDirCaption=Builds folder
+ru.DownloadDirDescription=Куда скачивать игру, сборки и моды?
+en.DownloadDirDescription=Where should the game, builds and mods go?
+ru.DownloadDirPrompt=Сборки займут много места, выбери диск посвободнее. Папку можно поменять потом в настройках лаунчера.
+en.DownloadDirPrompt=Builds take a lot of space, pick a roomy drive. You can change the folder later in the launcher settings.

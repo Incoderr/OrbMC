@@ -82,7 +82,7 @@ impl CatalogView {
             .bg(rgb(palette.surface))
             .border_1()
             .border_color(rgb(palette.border))
-            .child(mod_project_thumbnail(sample, px(76.)))
+            .child(mod_project_thumbnail(sample, px(76.), palette))
             .child(
                 div()
                     .v_flex()
@@ -698,8 +698,8 @@ impl CatalogView {
                         let is_active = thumb_index == index;
                         let project_id = project_id.clone();
                         let icon = sample.icon;
-                        let icon_background = sample.icon_background;
-                        let icon_foreground = sample.icon_foreground;
+                        let icon_background = palette.control;
+                        let icon_foreground = palette.muted;
                         let url = if image.thumbnail.trim().is_empty() {
                             image.url.clone()
                         } else {

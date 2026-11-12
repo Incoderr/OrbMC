@@ -17,6 +17,8 @@ use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, RedirectPolic
 /// Attempts per file: network hiccups and truncated bodies are retried.
 const ATTEMPTS: u32 = 3;
 const CHUNK_BYTES: usize = 64 * 1024;
+/// How often a paused transfer checks whether it may go on.
+const PAUSE_POLL: Duration = Duration::from_millis(200);
 
 /// Progress and cancellation of one transfer, shared by the download task
 /// and the UI. A transfer may cover several files (a mod and its
@@ -33,6 +35,10 @@ struct TransferState {
     total: AtomicU64,
     cancelled: AtomicBool,
     started: Mutex<Option<Instant>>,
+    /// Set while the player has paused the transfer.
+    paused: Mutex<Option<Instant>>,
+    /// Time spent paused, left out of the speed.
+    paused_total: Mutex<Duration>,
     /// Batch mode: several files share one byte counter.
     batch: AtomicBool,
     files_done: AtomicU64,
@@ -60,6 +66,59 @@ impl TransferHandle {
         self.state.cancelled.load(Ordering::Relaxed)
     }
 
+    /// Holds the download between chunks until [`Self::resume`].
+    pub fn pause(&self) {
+        if let Ok(mut paused) = self.state.paused.lock()
+            && paused.is_none()
+        {
+            *paused = Some(Instant::now());
+        }
+    }
+
+    pub fn resume(&self) {
+        let since = self
+            .state
+            .paused
+            .lock()
+            .ok()
+            .and_then(|mut paused| paused.take());
+        if let (Some(since), Ok(mut total)) = (since, self.state.paused_total.lock()) {
+            *total += since.elapsed();
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.state
+            .paused
+            .lock()
+            .is_ok_and(|paused| paused.is_some())
+    }
+
+    /// Time spent paused so far, including a pause still going on.
+    fn paused_for(&self) -> Duration {
+        let total = self
+            .state
+            .paused_total
+            .lock()
+            .map(|total| *total)
+            .unwrap_or_default();
+        let current = self
+            .state
+            .paused
+            .lock()
+            .ok()
+            .and_then(|paused| paused.map(|since| since.elapsed()))
+            .unwrap_or_default();
+        total + current
+    }
+
+    /// Waits while the transfer is paused; ends at once when it is cancelled.
+    pub async fn wait_while_paused(&self, executor: &BackgroundExecutor) {
+        while self.is_paused() && !self.is_cancelled() {
+            executor.timer(PAUSE_POLL).await;
+        }
+    }
+
     pub fn progress(&self) -> TransferProgress {
         let received = self.state.received.load(Ordering::Relaxed);
         let total = self.state.total.load(Ordering::Relaxed);
@@ -69,7 +128,12 @@ impl TransferHandle {
             .lock()
             .ok()
             .and_then(|started| *started)
-            .map(|started| started.elapsed().as_secs_f64())
+            .map(|started| {
+                started
+                    .elapsed()
+                    .saturating_sub(self.paused_for())
+                    .as_secs_f64()
+            })
             .unwrap_or_default();
         let files_total = self.state.files_total.load(Ordering::Relaxed);
         TransferProgress {
@@ -111,6 +175,14 @@ impl TransferHandle {
         if let Ok(mut started) = self.state.started.lock() {
             *started = Some(Instant::now());
         }
+        if let Ok(mut total) = self.state.paused_total.lock() {
+            *total = Duration::ZERO;
+        }
+        if let Ok(mut paused) = self.state.paused.lock()
+            && paused.is_some()
+        {
+            *paused = Some(Instant::now());
+        }
     }
 
     fn add(&self, bytes: u64) {
@@ -131,6 +203,7 @@ impl std::fmt::Debug for TransferHandle {
         f.debug_struct("TransferHandle")
             .field("progress", &self.progress())
             .field("cancelled", &self.is_cancelled())
+            .field("paused", &self.is_paused())
             .finish()
     }
 }
@@ -217,8 +290,13 @@ pub async fn download_file(
 
     let mut attempt = 1;
     loop {
+        transfer.wait_while_paused(executor).await;
+        if transfer.is_cancelled() {
+            return Err(DownloadError::Cancelled);
+        }
         let mut written = 0;
-        let result = attempt_download(&client, &file, directory, transfer, &mut written).await;
+        let result =
+            attempt_download(&client, &file, directory, transfer, executor, &mut written).await;
         if result.is_err() {
             transfer.rollback(written);
         }
@@ -248,6 +326,7 @@ async fn attempt_download(
     file: &FileDownload<'_>,
     directory: &Path,
     transfer: &TransferHandle,
+    executor: &BackgroundExecutor,
     written: &mut u64,
 ) -> Result<tempfile::NamedTempFile, DownloadError> {
     transfer.begin_file(file.size);
@@ -272,6 +351,7 @@ async fn attempt_download(
     let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
     let mut buffer = vec![0; CHUNK_BYTES];
     loop {
+        transfer.wait_while_paused(executor).await;
         if transfer.is_cancelled() {
             return Err(DownloadError::Cancelled);
         }
@@ -338,6 +418,17 @@ mod tests {
         assert_eq!(transfer.progress().total, None);
         transfer.clone().cancel();
         assert!(transfer.is_cancelled());
+    }
+
+    #[test]
+    fn pause_and_resume_are_shared_by_clones() {
+        let transfer = TransferHandle::default();
+        transfer.clone().pause();
+        assert!(transfer.is_paused());
+        transfer.pause();
+        transfer.clone().resume();
+        assert!(!transfer.is_paused());
+        assert!(!transfer.is_cancelled());
     }
 
     #[test]
