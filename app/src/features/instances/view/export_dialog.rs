@@ -1,6 +1,7 @@
 //! "Export as a modpack" dialog: format, name and version, the folders of
 //! the build that go into the pack, then a save dialog and the export.
 
+use crate::shared::motion::DialogMotion as _;
 use std::path::PathBuf;
 
 use super::InstancesView;
@@ -120,7 +121,7 @@ impl InstancesView {
             dialog
                 .w(px(520.))
                 .title(title.clone())
-                .content(move |content, _, cx| {
+                .animated_content(move |content, _, cx| {
                     let state = draft.read(cx);
                     let format = state.format;
                     let busy = matches!(state.status, ExportStatus::Exporting);

@@ -1,6 +1,7 @@
 use crate::app::LauncherApp;
 use crate::features::instances::InstanceProfile;
 use crate::features::versions::CreateProfile;
+use crate::shared::motion::DialogMotion as _;
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 
@@ -15,7 +16,7 @@ impl LauncherApp {
             dialog
                 .w(px(560.))
                 .title(title)
-                .content(move |content, _, _| content.child(picker.clone()))
+                .animated_content(move |content, _, _| content.child(picker.clone()))
         });
     }
 

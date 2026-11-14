@@ -187,9 +187,20 @@ impl InstancesView {
     pub(crate) fn toggle_log_follow(&mut self, cx: &mut Context<Self>) {
         self.log_follow = !self.log_follow;
         if self.log_follow {
+            // Lines that came in while the log stood still show up now.
+            self.refresh_log(cx);
             self.log_scroll.scroll_to_bottom();
         }
         cx.notify();
+    }
+
+    /// Stops following new lines: the player is selecting or reading
+    /// older output, which must not move under the cursor.
+    pub(crate) fn hold_log(&mut self, cx: &mut Context<Self>) {
+        if self.log_follow {
+            self.log_follow = false;
+            cx.notify();
+        }
     }
 
     /// Rebuilds the log text of the open build when its log changed, and
@@ -198,6 +209,16 @@ impl InstancesView {
         let (BuildsScreen::Details(id), DetailsTab::Log) = (self.screen, self.details_tab) else {
             return;
         };
+        // A held log keeps its text: new lines would shift a selection, and
+        // trimming the oldest lines would move it to other text.
+        if !self.log_follow
+            && self
+                .log_text
+                .as_ref()
+                .is_some_and(|(cached, _, _)| *cached == id)
+        {
+            return;
+        }
         let (version, text) = match self.instances.read(cx).game_log(id) {
             Some(log) => (log.version(), log.tail(LOG_TAIL_LINES)),
             None => (0, String::new()),

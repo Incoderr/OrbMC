@@ -1,12 +1,14 @@
 //! Account menu at the bottom of the sidebar: offline mode with its player
 //! name, or one of the signed-in Ely.by accounts.
 
+use crate::shared::motion::DialogMotion as _;
+use crate::shared::motion::MenuMotion as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button as ComponentButton, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -198,7 +200,7 @@ impl AccountView {
         };
 
         trigger
-            .dropdown_menu(move |mut menu, _, _| {
+            .motion_menu(move |mut menu, _, _| {
                 let selected_uuid = selected.as_ref().map(|account| account.uuid.clone());
                 let select = |uuid: Option<String>| {
                     let owner = owner.clone();
@@ -285,7 +287,7 @@ impl AccountView {
             dialog
                 .w(px(420.))
                 .title(title.clone())
-                .content(move |content, _, cx| {
+                .animated_content(move |content, _, cx| {
                     let Some(view) = owner.upgrade() else {
                         return content;
                     };
@@ -432,7 +434,7 @@ impl AccountView {
             dialog
                 .w(px(420.))
                 .title(title.clone())
-                .content(move |content, _, cx| {
+                .animated_content(move |content, _, cx| {
                     let name = content_input.read(cx).value().trim().to_owned();
                     let is_valid = is_valid_player_name(&name);
                     let save_owner = content_owner.clone();

@@ -29,6 +29,48 @@ mod filter_tests {
     use super::*;
 
     #[test]
+    fn every_kind_lists_its_own_categories_once() {
+        for kind in ProjectKind::ALL {
+            let categories = ModCategory::for_kind(kind);
+            assert!(!categories.is_empty());
+            assert!(!categories.contains(&ModCategory::All));
+            for (index, category) in categories.iter().enumerate() {
+                assert!(!categories[index + 1..].contains(category), "{category:?}");
+                assert!(category.modrinth_slug().is_some());
+            }
+        }
+        assert!(ModCategory::for_kind(ProjectKind::Mod).contains(&ModCategory::Worldgen));
+        assert!(ModCategory::for_kind(ProjectKind::Shader).contains(&ModCategory::Cartoon));
+        assert!(!ModCategory::for_kind(ProjectKind::Shader).contains(&ModCategory::Library));
+    }
+
+    #[test]
+    fn provider_tags_map_to_categories() {
+        assert_eq!(
+            ModCategory::from_tag("worldgen"),
+            Some(ModCategory::Worldgen)
+        );
+        assert_eq!(
+            ModCategory::from_tag("game-mechanics"),
+            Some(ModCategory::GameMechanics)
+        );
+        // CurseForge slugs and names.
+        assert_eq!(
+            ModCategory::from_tag("performance"),
+            Some(ModCategory::Optimization)
+        );
+        assert_eq!(
+            ModCategory::from_tag("API and Library"),
+            Some(ModCategory::Library)
+        );
+        // Loaders are not categories.
+        assert_eq!(ModCategory::from_tag("fabric"), None);
+        assert_eq!(ModCategory::All.modrinth_slug(), None);
+        assert!(ModCategory::Equipment.matches_curseforge("armor-weapons-tools", ""));
+        assert!(!ModCategory::Cursed.matches_curseforge("cursed", "Cursed"));
+    }
+
+    #[test]
     fn picking_an_active_filter_again_turns_it_off() {
         let mut state = ModsState::default();
         state.toggle_category(ModCategory::Magic);
@@ -94,82 +136,324 @@ mod filter_tests {
     }
 }
 
+/// Catalog category. The list follows the Modrinth categories (each project
+/// kind has its own set, see `for_kind`); CurseForge categories are matched
+/// by slug or name where an equivalent exists.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModCategory {
     #[default]
     All,
     Adventure,
-    Technology,
+    Cartoon,
+    Challenging,
+    Combat,
+    Cursed,
     Decoration,
-    Optimization,
-    Libraries,
+    Economy,
+    Equipment,
+    Fantasy,
+    Food,
+    GameMechanics,
+    KitchenSink,
+    Library,
+    Lightweight,
     Magic,
-    Rpg,
+    Management,
+    Minigame,
+    Mobs,
+    Modded,
+    Multiplayer,
+    Optimization,
+    Quests,
+    Realistic,
+    SemiRealistic,
+    Simplistic,
+    Social,
+    Storage,
+    Technology,
+    Themed,
+    Transportation,
+    Tweaks,
+    Utility,
+    VanillaLike,
+    Worldgen,
+}
+
+/// What one category is called on the providers and in the interface.
+struct CategoryInfo {
+    modrinth: &'static str,
+    ru: &'static str,
+    en: &'static str,
+    /// CurseForge category slugs or names that mean the same.
+    curseforge: &'static [&'static str],
 }
 
 impl ModCategory {
-    pub const ALL: [Self; 8] = [
-        Self::All,
-        Self::Adventure,
-        Self::Technology,
-        Self::Decoration,
-        Self::Optimization,
-        Self::Libraries,
-        Self::Magic,
-        Self::Rpg,
-    ];
-
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::All => "mods-filter-all",
-            Self::Adventure => "mods-filter-adventure",
-            Self::Technology => "mods-filter-technology",
-            Self::Decoration => "mods-filter-decoration",
-            Self::Optimization => "mods-filter-optimization",
-            Self::Libraries => "mods-filter-libraries",
-            Self::Magic => "mods-filter-magic",
-            Self::Rpg => "mods-filter-rpg",
+    /// Categories of one project kind, as Modrinth lists them
+    /// (`/v2/tag/category`, "categories" header), without `All`.
+    pub fn for_kind(kind: ProjectKind) -> &'static [Self] {
+        use ModCategory::*;
+        match kind {
+            ProjectKind::Mod => &[
+                Adventure,
+                Cursed,
+                Decoration,
+                Economy,
+                Equipment,
+                Food,
+                GameMechanics,
+                Library,
+                Magic,
+                Management,
+                Minigame,
+                Mobs,
+                Optimization,
+                Social,
+                Storage,
+                Technology,
+                Transportation,
+                Utility,
+                Worldgen,
+            ],
+            ProjectKind::Modpack => &[
+                Adventure,
+                Challenging,
+                Combat,
+                KitchenSink,
+                Lightweight,
+                Magic,
+                Multiplayer,
+                Optimization,
+                Quests,
+                Technology,
+            ],
+            ProjectKind::ResourcePack => &[
+                Combat,
+                Cursed,
+                Decoration,
+                Modded,
+                Realistic,
+                Simplistic,
+                Themed,
+                Tweaks,
+                Utility,
+                VanillaLike,
+            ],
+            ProjectKind::Shader => &[
+                Cartoon,
+                Cursed,
+                Fantasy,
+                Realistic,
+                SemiRealistic,
+                VanillaLike,
+            ],
         }
+    }
+
+    fn info(self) -> CategoryInfo {
+        let info = |modrinth, ru, en, curseforge| CategoryInfo {
+            modrinth,
+            ru,
+            en,
+            curseforge,
+        };
+        match self {
+            Self::All => info("", "Все", "All", &[]),
+            Self::Adventure => info(
+                "adventure",
+                "Приключения",
+                "Adventure",
+                &["adventure-rpg", "adventure and rpg", "adventure-and-rpg"],
+            ),
+            Self::Cartoon => info("cartoon", "Мультяшные", "Cartoon", &[]),
+            Self::Challenging => info("challenging", "Хардкор", "Challenging", &["hardcore"]),
+            Self::Combat => info(
+                "combat",
+                "Сражения",
+                "Combat",
+                &["combat-pvp", "combat / pvp"],
+            ),
+            Self::Cursed => info("cursed", "Проклятые", "Cursed", &[]),
+            Self::Decoration => info("decoration", "Декорации", "Decoration", &["cosmetic"]),
+            Self::Economy => info("economy", "Экономика", "Economy", &[]),
+            Self::Equipment => info(
+                "equipment",
+                "Снаряжение",
+                "Equipment",
+                &["armor-weapons-tools", "armor, tools, and weapons"],
+            ),
+            Self::Fantasy => info("fantasy", "Фэнтези", "Fantasy", &["fantasy"]),
+            Self::Food => info("food", "Еда", "Food", &["food"]),
+            Self::GameMechanics => {
+                info("game-mechanics", "Игровые механики", "Game mechanics", &[])
+            }
+            Self::KitchenSink => info(
+                "kitchen-sink",
+                "Всё и сразу",
+                "Kitchen sink",
+                &["extra-large", "extra large"],
+            ),
+            Self::Library => info(
+                "library",
+                "Библиотеки",
+                "Library",
+                &["library-api", "api and library"],
+            ),
+            Self::Lightweight => info(
+                "lightweight",
+                "Лёгкие",
+                "Lightweight",
+                &["small-light", "small / light"],
+            ),
+            Self::Magic => info("magic", "Магия", "Magic", &["magic"]),
+            Self::Management => info(
+                "management",
+                "Управление",
+                "Management",
+                &["server-utility", "server utility"],
+            ),
+            Self::Minigame => info(
+                "minigame",
+                "Мини-игры",
+                "Minigame",
+                &["mini-game", "mini game", "minigames"],
+            ),
+            Self::Mobs => info("mobs", "Мобы", "Mobs", &["mobs"]),
+            Self::Modded => info(
+                "modded",
+                "Для модов",
+                "Modded",
+                &["mod-support", "mod support"],
+            ),
+            Self::Multiplayer => info(
+                "multiplayer",
+                "Мультиплеер",
+                "Multiplayer",
+                &["multiplayer"],
+            ),
+            Self::Optimization => info(
+                "optimization",
+                "Оптимизация",
+                "Optimization",
+                &["performance"],
+            ),
+            Self::Quests => info("quests", "Квесты", "Quests", &["quests"]),
+            Self::Realistic => info(
+                "realistic",
+                "Реалистичные",
+                "Realistic",
+                &["realistic", "photo-realistic", "photo realistic"],
+            ),
+            Self::SemiRealistic => {
+                info("semi-realistic", "Полуреалистичные", "Semi-realistic", &[])
+            }
+            Self::Simplistic => info("simplistic", "Простые", "Simplistic", &[]),
+            Self::Social => info("social", "Общение", "Social", &[]),
+            Self::Storage => info("storage", "Хранение", "Storage", &["storage"]),
+            Self::Technology => info(
+                "technology",
+                "Технологии",
+                "Technology",
+                &["technology", "tech"],
+            ),
+            Self::Themed => info("themed", "Тематические", "Themed", &[]),
+            Self::Transportation => info(
+                "transportation",
+                "Транспорт",
+                "Transportation",
+                &["player-transport", "player transport"],
+            ),
+            Self::Tweaks => info("tweaks", "Твики", "Tweaks", &[]),
+            Self::Utility => info(
+                "utility",
+                "Утилиты",
+                "Utility",
+                &["utility-qol", "utility & qol"],
+            ),
+            Self::VanillaLike => info(
+                "vanilla-like",
+                "Как в ванилле",
+                "Vanilla-like",
+                &["vanilla", "traditional"],
+            ),
+            Self::Worldgen => info(
+                "worldgen",
+                "Генерация мира",
+                "World generation",
+                &["world-gen", "world gen"],
+            ),
+        }
+    }
+
+    pub fn id(self) -> String {
+        format!("mods-filter-{}", self.modrinth_slug().unwrap_or("all"))
     }
 
     pub fn title(self, locale: Locale) -> &'static str {
-        match self {
-            Self::All => locale.text("Все", "All"),
-            Self::Adventure => locale.text("Приключения", "Adventure"),
-            Self::Technology => locale.text("Технологии", "Technology"),
-            Self::Decoration => locale.text("Декорации", "Decoration"),
-            Self::Optimization => locale.text("Оптимизация", "Optimization"),
-            Self::Libraries => locale.text("Библиотеки", "Libraries"),
-            Self::Magic => locale.text("Магия", "Magic"),
-            Self::Rpg => "RPG",
-        }
+        let info = self.info();
+        locale.text(info.ru, info.en)
     }
 
     pub(crate) fn modrinth_slug(self) -> Option<&'static str> {
-        match self {
-            Self::All => None,
-            Self::Adventure => Some("adventure"),
-            Self::Technology => Some("technology"),
-            Self::Decoration => Some("decoration"),
-            Self::Optimization => Some("optimization"),
-            Self::Libraries => Some("library"),
-            Self::Magic => Some("magic"),
-            Self::Rpg => Some("adventure"),
-        }
+        Some(self.info().modrinth).filter(|slug| !slug.is_empty())
     }
 
-    pub(crate) fn curseforge_slug(self) -> Option<&'static str> {
-        match self {
-            Self::All => None,
-            Self::Adventure | Self::Rpg => Some("adventure-rpg"),
-            Self::Technology => Some("technology"),
-            Self::Decoration => Some("cosmetic"),
-            Self::Optimization => Some("performance"),
-            Self::Libraries => Some("library-api"),
-            Self::Magic => Some("magic"),
-        }
+    /// Whether a CurseForge category (its slug or name) means this one.
+    pub(crate) fn matches_curseforge(self, slug: &str, name: &str) -> bool {
+        self.info().curseforge.iter().any(|candidate| {
+            candidate.eq_ignore_ascii_case(slug) || candidate.eq_ignore_ascii_case(name)
+        })
+    }
+
+    /// The category a provider tag stands for: a Modrinth slug, or a
+    /// CurseForge slug or name.
+    pub(crate) fn from_tag(tag: &str) -> Option<Self> {
+        ALL_CATEGORIES.into_iter().find(|category| {
+            category
+                .modrinth_slug()
+                .is_some_and(|slug| slug.eq_ignore_ascii_case(tag))
+                || category.matches_curseforge(tag, tag)
+        })
     }
 }
+
+/// Every category but `All`; `for_kind` decides what is shown where.
+const ALL_CATEGORIES: [ModCategory; 34] = [
+    ModCategory::Adventure,
+    ModCategory::Cartoon,
+    ModCategory::Challenging,
+    ModCategory::Combat,
+    ModCategory::Cursed,
+    ModCategory::Decoration,
+    ModCategory::Economy,
+    ModCategory::Equipment,
+    ModCategory::Fantasy,
+    ModCategory::Food,
+    ModCategory::GameMechanics,
+    ModCategory::KitchenSink,
+    ModCategory::Library,
+    ModCategory::Lightweight,
+    ModCategory::Magic,
+    ModCategory::Management,
+    ModCategory::Minigame,
+    ModCategory::Mobs,
+    ModCategory::Modded,
+    ModCategory::Multiplayer,
+    ModCategory::Optimization,
+    ModCategory::Quests,
+    ModCategory::Realistic,
+    ModCategory::SemiRealistic,
+    ModCategory::Simplistic,
+    ModCategory::Social,
+    ModCategory::Storage,
+    ModCategory::Technology,
+    ModCategory::Themed,
+    ModCategory::Transportation,
+    ModCategory::Tweaks,
+    ModCategory::Utility,
+    ModCategory::VanillaLike,
+    ModCategory::Worldgen,
+];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModSort {
@@ -523,7 +807,6 @@ impl ModsState {
         };
         if self.kind != ProjectKind::Mod {
             filters.loader = None;
-            filters.category = ModCategory::All;
         }
         filters
     }

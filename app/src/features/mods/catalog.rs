@@ -1311,13 +1311,13 @@ fn modrinth_facets(kind: ProjectKind, filters: &ModSearchFilters) -> Vec<Vec<Str
     if let Some(author) = &filters.author {
         facets.push(vec![format!("author:{}", author.name)]);
     }
-    if kind == ProjectKind::Mod {
-        if let Some(loader) = filters.loader {
-            facets.push(vec![format!("categories:{}", loader.modrinth_slug())]);
-        }
-        if let Some(category) = filters.category.modrinth_slug() {
-            facets.push(vec![format!("categories:{category}")]);
-        }
+    if kind == ProjectKind::Mod
+        && let Some(loader) = filters.loader
+    {
+        facets.push(vec![format!("categories:{}", loader.modrinth_slug())]);
+    }
+    if let Some(category) = filters.category.modrinth_slug() {
+        facets.push(vec![format!("categories:{category}")]);
     }
     facets
 }
@@ -1432,12 +1432,14 @@ async fn search_curseforge(
             loader.curseforge_id()
         )));
     }
-    if kind == ProjectKind::Mod
-        && let Some(slug) = compatibility_filter.category.curseforge_slug()
-    {
+    let category = compatibility_filter.category;
+    if category != ModCategory::All {
         let body = request_body(
             client.clone(),
-            &api.url("/v1/categories?gameId=432&classId=6"),
+            &api.url(&format!(
+                "/v1/categories?gameId={CURSEFORGE_MINECRAFT_GAME_ID}&classId={}",
+                kind.curseforge_class_id()
+            )),
             api.key(),
             ModSource::CurseForge,
         )
@@ -1446,6 +1448,8 @@ async fn search_curseforge(
         struct Category {
             id: u64,
             slug: String,
+            #[serde(default)]
+            name: String,
         }
         #[derive(Deserialize)]
         struct Categories {
@@ -1453,17 +1457,16 @@ async fn search_curseforge(
         }
         let categories: Categories = serde_json::from_str(&body)
             .map_err(|error| provider_error(ModSource::CurseForge, error.to_string()))?;
-        let category = categories
+        // CurseForge has no equivalent of some Modrinth categories: it
+        // then has nothing to show, and Modrinth answers alone.
+        let Some(found) = categories
             .data
             .iter()
-            .find(|category| category.slug == slug)
-            .ok_or_else(|| {
-                provider_error(
-                    ModSource::CurseForge,
-                    "This category is not available from CurseForge.".into(),
-                )
-            })?;
-        url.push_str(&format!("&categoryId={}", category.id));
+            .find(|found| category.matches_curseforge(&found.slug, &found.name))
+        else {
+            return Ok((Vec::new(), 0));
+        };
+        url.push_str(&format!("&categoryId={}", found.id));
     }
     if !query.trim().is_empty() {
         url.push_str("&searchFilter=");
@@ -1974,7 +1977,7 @@ impl ModProject {
         let raw_categories = project
             .categories
             .iter()
-            .map(|category| format!("{} {}", category.slug, category.name))
+            .flat_map(|category| [category.slug.clone(), category.name.clone()])
             .collect::<Vec<_>>();
         let categories = map_categories(raw_categories.iter().map(String::as_str));
         let loaders = project
@@ -2034,25 +2037,10 @@ impl ModProject {
 
 fn map_categories<'a>(tags: impl Iterator<Item = &'a str>) -> Vec<ModCategory> {
     let mut categories = Vec::new();
-    for tag in tags.map(str::to_ascii_lowercase) {
-        let category = if tag.contains("adventure") {
-            Some(ModCategory::Adventure)
-        } else if tag.contains("technology") || tag.contains("tech") {
-            Some(ModCategory::Technology)
-        } else if tag.contains("decoration") || tag.contains("decor") {
-            Some(ModCategory::Decoration)
-        } else if tag.contains("optimization") || tag.contains("performance") {
-            Some(ModCategory::Optimization)
-        } else if tag.contains("librar") || tag == "library" {
-            Some(ModCategory::Libraries)
-        } else if tag.contains("magic") {
-            Some(ModCategory::Magic)
-        } else if tag.contains("rpg") || tag.contains("roleplay") {
-            Some(ModCategory::Rpg)
-        } else {
-            None
-        };
-        if let Some(category) = category.filter(|category| !categories.contains(category)) {
+    for tag in tags {
+        if let Some(category) =
+            ModCategory::from_tag(tag).filter(|category| !categories.contains(category))
+        {
             categories.push(category);
         }
     }
@@ -2099,7 +2087,7 @@ fn loader_label(loaders: Vec<String>) -> String {
 }
 
 fn icon_for_categories(categories: &[ModCategory]) -> IconName {
-    if categories.contains(&ModCategory::Adventure) || categories.contains(&ModCategory::Rpg) {
+    if categories.contains(&ModCategory::Adventure) || categories.contains(&ModCategory::Worldgen) {
         IconName::Map
     } else if categories.contains(&ModCategory::Optimization) {
         IconName::Cpu
@@ -2107,6 +2095,8 @@ fn icon_for_categories(categories: &[ModCategory]) -> IconName {
         IconName::Blocks
     } else if categories.contains(&ModCategory::Magic) {
         IconName::Asterisk
+    } else if categories.contains(&ModCategory::Library) {
+        IconName::Package
     } else {
         IconName::Puzzle
     }
@@ -2156,9 +2146,18 @@ mod tests {
                 vec!["categories:optimization"]
             ]
         );
+        // Loaders only filter mods; categories filter every kind.
+        let shaders = super::ModSearchFilters {
+            category: ModCategory::Realistic,
+            ..filters
+        };
         assert_eq!(
-            super::modrinth_facets(ProjectKind::Shader, &filters),
-            vec![vec!["project_type:shader"], vec!["versions:1.21.1"]]
+            super::modrinth_facets(ProjectKind::Shader, &shaders),
+            vec![
+                vec!["project_type:shader"],
+                vec!["versions:1.21.1"],
+                vec!["categories:realistic"]
+            ]
         );
         let by_author = super::ModSearchFilters {
             author: Some(crate::features::mods::AuthorFilter {

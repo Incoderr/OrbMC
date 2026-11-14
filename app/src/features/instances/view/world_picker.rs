@@ -1,4 +1,5 @@
 use super::InstancesView;
+use crate::shared::motion::DialogMotion as _;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::Button as ComponentButton;
@@ -40,48 +41,50 @@ impl InstancesView {
         let owner = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, _| {
             let owner = owner.clone();
-            dialog.title(title.clone()).content(move |content, _, cx| {
-                let worlds = owner
-                    .upgrade()
-                    .map(|owner| owner.read(cx).instances.read(cx).worlds(id));
-                let body = match worlds {
-                    Some(WorldList::Ready(worlds)) if !worlds.is_empty() => div()
-                        .v_flex()
-                        .gap_2()
-                        .children(worlds.into_iter().map(|world| {
-                            let owner = owner.clone();
-                            let label = world.clone();
-                            ComponentButton::new(format!("quick-play-{world}"))
-                                .cursor_pointer()
-                                .outline()
-                                .label(label)
-                                .on_click(move |_, window, cx| {
-                                    window.close_dialog(cx);
-                                    let _ = owner.update(cx, |this, cx| {
-                                        this.launch_into(id, Some(world.clone()), cx)
-                                    });
-                                })
-                        }))
-                        .into_any_element(),
-                    Some(WorldList::Ready(_)) => div()
-                        .child(locale.text(
-                            "Миров пока нет. Создай мир в игре — он появится здесь.",
-                            "No worlds yet. Create one in the game first.",
-                        ))
-                        .into_any_element(),
-                    Some(WorldList::Failed(error)) => div().child(error).into_any_element(),
-                    _ => div()
-                        .child(locale.text("Читаем сохранения…", "Loading worlds…"))
-                        .into_any_element(),
-                };
-                content.child(
-                    div()
-                        .p_4()
-                        .max_h(px(420.))
-                        .overflow_y_scrollbar()
-                        .child(body),
-                )
-            })
+            dialog
+                .title(title.clone())
+                .animated_content(move |content, _, cx| {
+                    let worlds = owner
+                        .upgrade()
+                        .map(|owner| owner.read(cx).instances.read(cx).worlds(id));
+                    let body = match worlds {
+                        Some(WorldList::Ready(worlds)) if !worlds.is_empty() => div()
+                            .v_flex()
+                            .gap_2()
+                            .children(worlds.into_iter().map(|world| {
+                                let owner = owner.clone();
+                                let label = world.clone();
+                                ComponentButton::new(format!("quick-play-{world}"))
+                                    .cursor_pointer()
+                                    .outline()
+                                    .label(label)
+                                    .on_click(move |_, window, cx| {
+                                        window.close_dialog(cx);
+                                        let _ = owner.update(cx, |this, cx| {
+                                            this.launch_into(id, Some(world.clone()), cx)
+                                        });
+                                    })
+                            }))
+                            .into_any_element(),
+                        Some(WorldList::Ready(_)) => div()
+                            .child(locale.text(
+                                "Миров пока нет. Создай мир в игре — он появится здесь.",
+                                "No worlds yet. Create one in the game first.",
+                            ))
+                            .into_any_element(),
+                        Some(WorldList::Failed(error)) => div().child(error).into_any_element(),
+                        _ => div()
+                            .child(locale.text("Читаем сохранения…", "Loading worlds…"))
+                            .into_any_element(),
+                    };
+                    content.child(
+                        div()
+                            .p_4()
+                            .max_h(px(420.))
+                            .overflow_y_scrollbar()
+                            .child(body),
+                    )
+                })
         });
     }
 

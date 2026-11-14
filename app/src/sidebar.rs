@@ -1,11 +1,31 @@
 use crate::app::LauncherApp;
 use crate::features::settings::*;
 use crate::router::Page;
+use crate::shared::motion::TooltipMotion as _;
+use crate::shared::motion::{SpringHover, mix_rgb};
 use crate::shared::theme::Palette;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::*;
+
+/// How far a hovered button pushes its icon and label to the right.
+const HOVER_SHIFT: f32 = 6.;
+
+/// Icon with an optional label; `hover` slides it to the right.
+fn button_content(icon: IconName, label: Option<&'static str>, hover: f32) -> Div {
+    match label {
+        None => div().w_full().flex().justify_center().child(icon),
+        Some(label) => div()
+            .w_full()
+            .h_flex()
+            .items_center()
+            .gap_3()
+            .pl(px(HOVER_SHIFT * hover.max(0.)))
+            .child(icon)
+            .child(label),
+    }
+}
 
 impl LauncherApp {
     pub(crate) fn navigation_button(
@@ -19,62 +39,45 @@ impl LauncherApp {
             || (page == Page::Catalog && self.active_page == Page::ModDetails);
         let is_collapsed = self.settings.read(cx).sidebar_collapsed();
         let title = page.title(locale);
-        let content = if is_collapsed {
-            div()
-                .w_full()
-                .flex()
-                .justify_center()
-                .child(page.icon())
-                .into_any_element()
+        let id = page.element_id();
+        let (background, hover_background) = if is_selected {
+            (palette.selected, palette.selected_hover)
         } else {
-            div()
-                .w_full()
-                .h_flex()
-                .items_center()
-                .gap_3()
-                .child(page.icon())
-                .child(title)
-                .into_any_element()
+            (palette.sidebar, palette.hover)
         };
 
-        let button = UiButton::new(page.element_id())
+        let button = UiButton::new(id)
             .cursor_pointer()
             .w_full()
             .px_3()
             .py_3()
             .rounded(px(8.))
-            .bg(rgb(if is_selected {
-                palette.selected
-            } else {
-                palette.sidebar
-            }))
             .text_color(rgb(if is_selected {
                 palette.accent
             } else {
                 palette.foreground
             }))
-            .hover(|style| {
-                style.bg(rgb(if is_selected {
-                    palette.selected_hover
-                } else {
-                    palette.hover
-                }))
-            })
             .active(|style| style.bg(rgb(palette.pressed)))
             .selected(is_selected)
             .accessibility_label(title)
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.navigate_to(page, window, cx);
-            }))
-            .child(content);
+            }));
 
         let button = if is_collapsed {
-            button.tooltip(move |window, cx| Tooltip::new(title).build(window, cx))
+            button.tooltip(move |window, cx| Tooltip::new(title).build_animated(window, cx))
         } else {
             button
         };
 
-        button.into_any_element()
+        let label = (!is_collapsed).then_some(title);
+        button
+            .spring_hover(id, move |button, hover| {
+                button
+                    .bg(mix_rgb(background, hover_background, hover))
+                    .child(button_content(page.icon(), label, hover))
+            })
+            .into_any_element()
     }
 
     pub(crate) fn sidebar_toggle_button(
@@ -83,6 +86,7 @@ impl LauncherApp {
         locale: Locale,
         cx: &Context<Self>,
     ) -> AnyElement {
+        const ID: &str = "sidebar-toggle";
         let is_collapsed = self.settings.read(cx).sidebar_collapsed();
         let title = if is_collapsed {
             locale.text("Развернуть панель", "Expand sidebar")
@@ -95,37 +99,13 @@ impl LauncherApp {
         } else {
             IconName::PanelLeftClose
         };
-        let content = if is_collapsed {
-            div()
-                .w_full()
-                .flex()
-                .justify_center()
-                .child(icon)
-                .into_any_element()
-        } else {
-            div()
-                .w_full()
-                .h_flex()
-                .items_center()
-                .gap_3()
-                .child(icon)
-                .child(locale.text("Свернуть", "Collapse"))
-                .into_any_element()
-        };
 
-        let button = UiButton::new("sidebar-toggle")
+        let button = UiButton::new(ID)
             .cursor_pointer()
             .w_full()
             .px_3()
             .py_3()
             .rounded(px(8.))
-            .bg(rgb(palette.sidebar))
-            .text_color(rgb(palette.muted))
-            .hover(|style| {
-                style
-                    .bg(rgb(palette.hover))
-                    .text_color(rgb(palette.foreground))
-            })
             .active(|style| style.bg(rgb(palette.pressed)))
             .accessibility_label(title)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -134,17 +114,22 @@ impl LauncherApp {
                     settings.save();
                     cx.notify();
                 });
-                this.sidebar_toggles += 1;
-                cx.notify();
-            }))
-            .child(content);
+            }));
         // Expanded, the label already says what the button does.
         let button = if is_collapsed {
-            button.tooltip(move |window, cx| Tooltip::new(title).build(window, cx))
+            button.tooltip(move |window, cx| Tooltip::new(title).build_animated(window, cx))
         } else {
             button
         };
 
-        button.into_any_element()
+        let label = (!is_collapsed).then_some(locale.text("Свернуть", "Collapse"));
+        button
+            .spring_hover(ID, move |button, hover| {
+                button
+                    .bg(mix_rgb(palette.sidebar, palette.hover, hover))
+                    .text_color(mix_rgb(palette.muted, palette.foreground, hover))
+                    .child(button_content(icon, label, hover))
+            })
+            .into_any_element()
     }
 }

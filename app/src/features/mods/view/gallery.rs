@@ -1,4 +1,5 @@
 use super::CatalogView;
+use crate::shared::motion::DialogMotion as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::WindowExt;
@@ -48,7 +49,7 @@ impl CatalogView {
             dialog
                 .w(px(880.))
                 .title(div().text_size(px(12.)).child(title.clone()))
-                .content({
+                .animated_content({
                     let image_url = image_url.clone();
                     let caption = caption.clone();
                     move |content, _, _| {

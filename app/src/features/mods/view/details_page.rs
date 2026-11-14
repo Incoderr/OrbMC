@@ -3,6 +3,7 @@ use super::{CatalogEvent, CatalogView};
 use crate::features::mods::catalog::*;
 use crate::features::mods::*;
 use crate::features::settings::*;
+use crate::shared::motion::TooltipMotion as _;
 use crate::shared::theme::Palette;
 use crate::shared::ui::{empty_page, selectable};
 use gpui_kit::assets::IconName;
@@ -123,7 +124,7 @@ impl CatalogView {
                                             "Все проекты автора",
                                             "All projects by this author",
                                         ))
-                                        .build(window, cx)
+                                        .build_animated(window, cx)
                                     })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.show_author(&author_project, cx);

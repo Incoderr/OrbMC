@@ -611,7 +611,24 @@ fn apply_jar_meta(record: &mut Record, index: &Path, jar: &Path) {
         // Some projects ship the icon as a hosted image already.
         record.icon_url = Some(spec);
     } else {
-        record.icon_path = extract_jar_icon(jar, &spec, index, &record.sha1);
+        record.icon_path = extract_jar_icon(jar, &jar_icon_entry(&spec), index, &record.sha1);
+    }
+}
+
+/// The jar entry an icon spec names. Besides plain jar paths, some mods
+/// give a resource location, `namespace:path`, which lives under `assets/`.
+fn jar_icon_entry(spec: &str) -> String {
+    let spec = spec.trim().trim_start_matches('/');
+    match spec.split_once(':') {
+        Some((namespace, path))
+            if !namespace.is_empty()
+                && namespace.chars().all(|char| {
+                    char.is_ascii_lowercase() || char.is_ascii_digit() || "_-.".contains(char)
+                }) =>
+        {
+            format!("assets/{namespace}/{}", path.trim_start_matches('/'))
+        }
+        _ => spec.to_owned(),
     }
 }
 
@@ -756,24 +773,75 @@ fn parse_mcmod_info(bytes: &[u8]) -> Option<JarMeta> {
 /// here. A tiny parser instead of a toml dependency — display files are
 /// `key = "value"` lines, and anything unparseable degrades to no metadata.
 fn parse_forgelle_meta(source: &str) -> Option<JarMeta> {
+    #[derive(PartialEq)]
+    enum Section {
+        /// Keys before any table: the file-wide `logoFile` lives here.
+        Root,
+        /// The first `[[mods]]`: the jar's own mod.
+        FirstMod,
+        /// Further mods of a multi-mod jar, dependencies and the rest.
+        Other,
+    }
     let mut meta = JarMeta::default();
-    let mut in_mods = false;
+    let mut section = Section::Root;
+    let mut seen_mods = false;
+    // Icon candidates, best first: NeoForge's square `iconFile`, then the
+    // mod's `logoFile`, then the file-wide one (often a banner, still better
+    // than nothing).
+    let (mut icon_file, mut mod_logo, mut root_logo) = (None, None, None);
+    // The closing quotes of a multi-line string still open on this line.
+    let mut open_string: Option<&str> = None;
     for line in source.lines() {
         let line = line.trim();
+        // A description may hold `key = value` or `[...]` lines of its own.
+        if let Some(quotes) = open_string {
+            if line.contains(quotes) {
+                open_string = None;
+            }
+            continue;
+        }
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         if line.starts_with('[') {
-            in_mods = line == "[[mods]]";
-            continue;
-        }
-        if !in_mods {
+            // Templates leave `[[mods]] #mandatory` and the like.
+            let header = line
+                .split_once('#')
+                .map_or(line, |(header, _)| header.trim_end());
+            section = if header == "[[mods]]" && !seen_mods {
+                seen_mods = true;
+                Section::FirstMod
+            } else {
+                Section::Other
+            };
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        match key.trim() {
+        let (key, value) = (key.trim(), value.trim());
+        for quotes in ["'''", "\"\"\""] {
+            if value.starts_with(quotes) && !value[quotes.len()..].contains(quotes) {
+                open_string = Some(quotes);
+            }
+        }
+        if section == Section::Root {
+            if key == "logoFile" {
+                root_logo = toml_string(value).filter(|value| known_label(value));
+            }
+            continue;
+        }
+        if section != Section::FirstMod {
+            continue;
+        }
+        match key {
+            "iconFile" | "icon" => {
+                icon_file = toml_string(value).filter(|value| known_label(value))
+            }
+            "logoFile" | "logo" => mod_logo = toml_string(value).filter(|value| known_label(value)),
+            _ => {}
+        }
+        match key {
             "displayName" | "name" => {
                 meta.name = toml_string(value).filter(|value| known_label(value))
             }
@@ -787,12 +855,10 @@ fn parse_forgelle_meta(source: &str) -> Option<JarMeta> {
                     None => joined,
                 });
             }
-            "logoFile" | "logo" | "logoBlurFile" | "icon" => {
-                meta.icon = toml_string(value).filter(|value| known_label(value))
-            }
             _ => {}
         }
     }
+    meta.icon = icon_file.or(mod_logo).or(root_logo);
     let usable = meta.name.is_some() || meta.icon.is_some();
     usable.then_some(meta)
 }
@@ -1485,6 +1551,52 @@ mod tests {
         assert_eq!(record.version, None);
         assert_eq!(record.author.as_deref(), Some("TheIllusiveC4"));
         assert!(record.icon_path.is_some());
+    }
+
+    #[test]
+    fn icon_specs_resolve_to_jar_entries() {
+        assert_eq!(jar_icon_entry("icon.png"), "icon.png");
+        assert_eq!(jar_icon_entry("/assets/a/icon.png"), "assets/a/icon.png");
+        assert_eq!(
+            jar_icon_entry("storagedrawers:textures/block/drawers_oak_front_2.png"),
+            "assets/storagedrawers/textures/block/drawers_oak_front_2.png"
+        );
+        assert_eq!(
+            jar_icon_entry("thaumcraft:textures/gui/branding/icon.png"),
+            "assets/thaumcraft/textures/gui/branding/icon.png"
+        );
+    }
+
+    #[test]
+    fn neoforge_icon_comes_from_icon_file_or_the_file_wide_logo() {
+        // The shape of Thaumic Tinkerer: Reforged: `logoFile` before any
+        // table, the square icon as `iconFile`, a description that holds
+        // lines looking like keys and tables.
+        let source = "modLoader=\"javafml\"\nlogoFile=\"banner.png\"\n\n[[mods]]\nmodId=\"tt\"\nversion=\"1.0\"\ndisplayName=\"Thaumic Tinkerer: Reforged\"\nbannerFile=\"TTLogo.png\"\niconFile=\"icon.png\"\nauthors=\"Vazkii, pixlepix\"\ndescription='''\n[Beta] port\nversion = \"9.9\"\n'''\n\n[[dependencies.tt]]\nmodId=\"neoforge\"\nversion=\"2.0\"\n";
+        let meta = parse_forgelle_meta(source).expect("parsed");
+        assert_eq!(meta.name.as_deref(), Some("Thaumic Tinkerer: Reforged"));
+        assert_eq!(meta.version.as_deref(), Some("1.0"));
+        assert_eq!(meta.author.as_deref(), Some("Vazkii"));
+        assert_eq!(meta.icon.as_deref(), Some("icon.png"));
+
+        // No per-mod icon: the file-wide logo is still better than nothing.
+        let root_only = "logoFile=\"logo.png\"\n[[mods]]\nmodId=\"a\"\ndisplayName=\"A\"\n";
+        assert_eq!(
+            parse_forgelle_meta(root_only)
+                .and_then(|meta| meta.icon)
+                .as_deref(),
+            Some("logo.png")
+        );
+        // Headers with a trailing comment still open the mod's table.
+        let commented = "[[mods]] #mandatory\nmodId=\"p\"\ndisplayName=\"Placebo\"\nlogoFile=\"p.png\" #optional\n";
+        let meta = parse_forgelle_meta(commented).expect("parsed");
+        assert_eq!(meta.name.as_deref(), Some("Placebo"));
+        assert_eq!(meta.icon.as_deref(), Some("p.png"));
+        // The first mod of a multi-mod jar names it, not the last.
+        let two_mods = "[[mods]]\nmodId=\"a\"\ndisplayName=\"A\"\n[[mods]]\nmodId=\"b\"\ndisplayName=\"B\"\nlogoFile=\"b.png\"\n";
+        let meta = parse_forgelle_meta(two_mods).expect("parsed");
+        assert_eq!(meta.name.as_deref(), Some("A"));
+        assert_eq!(meta.icon, None);
     }
 
     #[test]

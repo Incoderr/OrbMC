@@ -3,6 +3,7 @@ use crate::features::downloads::DownloadSummary;
 use crate::features::instances::view::widgets::{format_bytes, format_speed};
 use crate::features::settings::*;
 use crate::router::Page;
+use crate::shared::motion::TooltipMotion as _;
 use crate::shared::theme::Palette;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
@@ -63,7 +64,7 @@ impl LauncherApp {
             .text_color(rgb(palette.foreground))
             .hover(|style| style.bg(rgb(palette.hover)))
             .accessibility_label(tooltip.clone())
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build_animated(window, cx))
             .on_click(
                 cx.listener(|this, _, window, cx| this.navigate_to(Page::Instances, window, cx)),
             );
@@ -251,7 +252,7 @@ impl LauncherApp {
             .accessibility_label(label.clone())
             .tooltip({
                 let label = label.clone();
-                move |window, cx| Tooltip::new(label.clone()).build(window, cx)
+                move |window, cx| Tooltip::new(label.clone()).build_animated(window, cx)
             })
             .on_click(cx.listener(move |this, _, window, cx| match &click {
                 Click::Install => this.updater.update(cx, |updater, cx| updater.install(cx)),

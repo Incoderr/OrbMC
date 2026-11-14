@@ -1,3 +1,5 @@
+use crate::shared::motion::MenuMotion as _;
+use crate::shared::motion::TooltipMotion as _;
 use std::rc::Rc;
 
 use super::widgets::*;
@@ -5,6 +7,7 @@ use super::{CatalogEvent, CatalogView};
 use crate::features::mods::catalog::*;
 use crate::features::mods::*;
 use crate::features::settings::*;
+use crate::shared::motion::{Entrance, enter, lift_on_hover};
 use crate::shared::theme::Palette;
 use crate::shared::ui::selectable;
 use gpui_kit::assets::IconName;
@@ -12,7 +15,7 @@ use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::Button as ComponentButton;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::scroll::{ScrollableElement, Scrollbar};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
@@ -74,8 +77,8 @@ impl CatalogView {
                     author.name
                 ))
         });
-        let categories: Vec<_> = ModCategory::ALL
-            .into_iter()
+        let categories: Vec<_> = std::iter::once(ModCategory::All)
+            .chain(ModCategory::for_kind(selected_kind).iter().copied())
             .map(|category| {
                 let is_selected = category == selected_category;
                 UiButton::new(category.id())
@@ -162,7 +165,7 @@ impl CatalogView {
                     .child(selected_sort.title(locale))
                     .child(IconName::ChevronDown),
             )
-            .dropdown_menu(move |menu, _, _| {
+            .motion_menu(move |menu, _, _| {
                 let sort_owner = sort_owner.clone();
                 let sort_owner_downloads = sort_owner.clone();
                 let sort_owner_name = sort_owner.clone();
@@ -389,17 +392,31 @@ impl CatalogView {
                             item_sizes,
                             move |this, visible_range, _, cx| {
                                 let projects = this.mods.visible_mods();
+                                let first = visible_range.start;
                                 visible_range
-                                    .filter_map(|index| projects.get(index).copied())
-                                    .map(|project| {
-                                        div()
+                                    .filter_map(|index| {
+                                        projects.get(index).map(|project| (index - first, *project))
+                                    })
+                                    .map(|(position, project)| {
+                                        // Cards rise in as results arrive and
+                                        // as they scroll into view.
+                                        let row = div()
                                             .v_flex()
                                             .h(px(96.))
                                             .w_full()
                                             .min_w_0()
                                             .pr_4()
                                             .justify_center()
-                                            .child(this.mod_card(project, palette, locale, cx))
+                                            .child(this.mod_card(project, palette, locale, cx));
+                                        enter(
+                                            row,
+                                            SharedString::from(format!(
+                                                "mod-card-appear-{}",
+                                                project.id
+                                            )),
+                                            position,
+                                            Entrance::FromRight,
+                                        )
                                     })
                                     .collect::<Vec<_>>()
                             },
@@ -451,7 +468,7 @@ impl CatalogView {
                     .child(div().max_w(px(180.)).truncate().child(target_name))
                     .child(IconName::ChevronDown),
             )
-            .dropdown_menu(move |mut menu, _, _| {
+            .motion_menu(move |mut menu, _, _| {
                 let clear_owner = target_owner.clone();
                 menu = menu.item(
                     PopupMenuItem::new(locale.text("Все сборки", "All builds")).on_click(
@@ -689,20 +706,20 @@ impl CatalogView {
                         cx,
                         div().v_flex().gap_1().children(loaders).into_any_element(),
                     ))
-                    .child(div().h(px(1.)).bg(rgb(palette.border)))
-                    .child(Self::filter_section(
-                        FilterSection::Categories,
-                        locale.text("Категории", "Categories").to_owned(),
-                        self.mods.filters_collapsed(FilterSection::Categories),
-                        palette,
-                        cx,
-                        div()
-                            .v_flex()
-                            .gap_1()
-                            .children(categories)
-                            .into_any_element(),
-                    ))
             })
+            .child(div().h(px(1.)).bg(rgb(palette.border)))
+            .child(Self::filter_section(
+                FilterSection::Categories,
+                locale.text("Категории", "Categories").to_owned(),
+                self.mods.filters_collapsed(FilterSection::Categories),
+                palette,
+                cx,
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .children(categories)
+                    .into_any_element(),
+            ))
             // Only one provider while CurseForge is off: nothing to choose.
             .when(super::super::CURSEFORGE_ENABLED, |panel| {
                 panel
@@ -1053,7 +1070,7 @@ impl CatalogView {
                                 .disabled(target_blocked)
                                 .accessibility_label(removal_label.clone())
                                 .tooltip(move |window, cx| {
-                                    Tooltip::new(removal_label.clone()).build(window, cx)
+                                    Tooltip::new(removal_label.clone()).build_animated(window, cx)
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.uninstall_mod(uninstall_project.clone(), target_id, cx);
@@ -1089,7 +1106,7 @@ impl CatalogView {
                         "Сборки CurseForge пока ставятся только с сайта",
                         "CurseForge packs can only be installed from the website for now",
                     ))
-                    .build(window, cx)
+                    .build_animated(window, cx)
                 })
                 .on_click(move |_, _, cx| cx.open_url(&page_url))
                 .child(locale.text("Открыть", "Open"))
@@ -1231,7 +1248,8 @@ impl CatalogView {
                                     .text_color(rgb(palette.muted))
                                     .truncate()
                                     .tooltip(move |window, cx| {
-                                        Tooltip::new(tooltip_description.clone()).build(window, cx)
+                                        Tooltip::new(tooltip_description.clone())
+                                            .build_animated(window, cx)
                                     })
                                     .child(description.clone()),
                             )
@@ -1295,16 +1313,15 @@ impl CatalogView {
             ProjectKind::Modpack => self.modpack_install_action(project, palette, locale, cx),
         };
 
-        div()
+        let card = div()
             .id(format!("mod-card-{}", project.id))
+            .bg(rgb(palette.surface))
             .h_flex()
             .w_full()
             .min_w_0()
             .items_center()
             .gap_3()
             .rounded(px(10.))
-            .bg(rgb(palette.surface))
-            .hover(|style| style.bg(rgb(palette.hover)))
             .border_1()
             .border_color(rgb(palette.border))
             .child(details_button)
@@ -1337,8 +1354,8 @@ impl CatalogView {
                             .child(project.source.title(locale)),
                     )
                     .child(action),
-            )
-            .into_any_element()
+            );
+        lift_on_hover(card, format!("mod-card-hover-{}", project.id), palette).into_any_element()
     }
 }
 

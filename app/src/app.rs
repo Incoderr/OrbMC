@@ -4,6 +4,7 @@ use crate::{
     features::instances::InstancesState,
     features::settings::{Locale, SettingsState, ThemeChoice},
     router::Page,
+    shared::motion::{BOUNCY, Entrance, enter, spring},
 };
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::{Theme, ThemeMode};
@@ -18,7 +19,6 @@ mod sidebar;
 
 const SIDEBAR_WIDTH: f32 = 252.;
 const SIDEBAR_COLLAPSED_WIDTH: f32 = 76.;
-const SIDEBAR_ANIMATION: std::time::Duration = std::time::Duration::from_millis(220);
 /// How many pages "back" remembers; older ones are dropped.
 const HISTORY_LIMIT: usize = 50;
 
@@ -52,9 +52,9 @@ pub struct LauncherApp {
     settings_view: Entity<crate::features::settings::SettingsView>,
     updater: Entity<crate::features::updates::Updater>,
     _updater_observer: Subscription,
-    /// Counts sidebar toggles in this run: a new value gives the sidebar a new
-    /// element id, which replays its width animation (none on startup).
-    sidebar_toggles: u32,
+    /// Where the next page comes in from: the right going forward, the left
+    /// going back, like turning pages.
+    page_entrance: Entrance,
 }
 impl LauncherApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -230,7 +230,7 @@ impl LauncherApp {
             account,
             updater,
             _updater_observer: updater_observer,
-            sidebar_toggles: 0,
+            page_entrance: Entrance::FromRight,
         }
     }
 
@@ -251,6 +251,7 @@ impl LauncherApp {
         }
         self.back_history.push(self.active_page);
         self.forward_history.clear();
+        self.page_entrance = Entrance::FromRight;
         self.show_page(page, window, cx);
     }
 
@@ -258,6 +259,7 @@ impl LauncherApp {
         while let Some(page) = self.back_history.pop() {
             if self.page_exists(page, cx) {
                 self.forward_history.push(self.active_page);
+                self.page_entrance = Entrance::FromLeft;
                 self.show_page(page, window, cx);
                 return;
             }
@@ -268,6 +270,7 @@ impl LauncherApp {
         while let Some(page) = self.forward_history.pop() {
             if self.page_exists(page, cx) {
                 self.back_history.push(self.active_page);
+                self.page_entrance = Entrance::FromRight;
                 self.show_page(page, window, cx);
                 return;
             }
@@ -311,7 +314,16 @@ impl Render for LauncherApp {
 
         let navigation_items: Vec<_> = Page::LIBRARY
             .into_iter()
-            .map(|page| self.navigation_button(page, palette, locale, cx))
+            .enumerate()
+            .map(|(index, page)| {
+                // Plays once: the sidebar stays mounted for the whole run.
+                enter(
+                    div().child(self.navigation_button(page, palette, locale, cx)),
+                    ("nav-appear", index),
+                    index + 1,
+                    Entrance::FromLeft,
+                )
+            })
             .collect();
         let settings_button = self.navigation_button(Page::Settings, palette, locale, cx);
         let collapse_button = self.sidebar_toggle_button(palette, locale, cx);
@@ -344,16 +356,10 @@ impl Render for LauncherApp {
         };
 
         let sidebar_collapsed = self.settings.read(cx).sidebar_collapsed();
-        let (from_width, to_width) = if sidebar_collapsed {
-            (SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH)
-        } else {
-            (SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH)
-        };
         let sidebar = div()
-            .id(("sidebar", self.sidebar_toggles))
+            .id("sidebar")
             .v_flex()
             .flex_none()
-            .w(px(to_width))
             .overflow_hidden()
             .h_full()
             .px_3()
@@ -369,20 +375,18 @@ impl Render for LauncherApp {
             .children(downloads)
             .child(div().h(px(1.)).w_full().bg(rgb(palette.border)))
             .child(self.account.clone())
-            .child(settings_button);
-        let sidebar = if self.sidebar_toggles == 0 {
-            sidebar.into_any_element()
-        } else {
-            sidebar
-                .with_animation(
-                    ("sidebar-width", self.sidebar_toggles),
-                    Animation::new(SIDEBAR_ANIMATION).with_easing(ease_out_quint()),
-                    move |sidebar, delta| {
-                        sidebar.w(px(from_width + (to_width - from_width) * delta))
-                    },
-                )
-                .into_any_element()
-        };
+            .child(settings_button)
+            // 0 expanded, 1 collapsed; the spring overshoots a little on
+            // arrival. A new spring starts at its target: no motion on startup.
+            .with_spring(
+                "sidebar-width",
+                spring(BOUNCY).to(if sidebar_collapsed { 1. } else { 0. }),
+                |sidebar, collapse: f32| {
+                    sidebar.w(px(
+                        SIDEBAR_WIDTH + (SIDEBAR_COLLAPSED_WIDTH - SIDEBAR_WIDTH) * collapse
+                    ))
+                },
+            );
 
         div()
             .flex()
@@ -400,7 +404,8 @@ impl Render for LauncherApp {
                 cx.listener(|this, _, window, cx| this.go_forward(window, cx)),
             )
             .child(sidebar)
-            .child(
+            // A new page id replays the entrance, from the side we came from.
+            .child(enter(
                 div()
                     .v_flex()
                     .flex_1()
@@ -411,6 +416,9 @@ impl Render for LauncherApp {
                     .pb_8()
                     .gap_4()
                     .child(page_body),
-            )
+                SharedString::from(format!("page-{active_page:?}")),
+                0,
+                self.page_entrance,
+            ))
     }
 }

@@ -5,14 +5,17 @@ use crate::features::instances::*;
 use crate::features::mods::*;
 use crate::features::settings::*;
 use crate::features::versions::*;
+use crate::shared::motion::MenuMotion as _;
+use crate::shared::motion::TooltipMotion as _;
+use crate::shared::motion::{Entrance, enter, lift_on_hover};
 use crate::shared::theme::Palette;
 use crate::shared::ui::selectable;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, Disableable, StyledExt};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button as ComponentButton, ButtonVariants as _};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::scroll::{ScrollableElement, Scrollbar};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
@@ -67,7 +70,7 @@ impl InstancesView {
                                     "Установить сборку из файла .mrpack или .zip CurseForge",
                                     "Install a pack from a .mrpack or CurseForge .zip file",
                                 ))
-                                .build(window, cx)
+                                .build_animated(window, cx)
                             })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.import_modpack(window, cx);
@@ -159,7 +162,7 @@ impl InstancesView {
             }))
             .hover(move |style| style.text_color(rgb(palette.foreground)))
             .accessibility_label(label)
-            .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+            .tooltip(move |window, cx| Tooltip::new(label).build_animated(window, cx))
             .on_click(cx.listener(move |this, _, _, cx| this.set_builds_layout(layout, cx)))
             .child(gpui_kit::component::Icon::empty().path(icon).size_4())
         };
@@ -195,7 +198,18 @@ impl InstancesView {
             .read(cx)
             .recent_profiles()
             .into_iter()
-            .map(|profile| self.instance_card(profile, palette, locale, cx))
+            .enumerate()
+            .map(|(index, profile)| {
+                let card = self.instance_card(profile, palette, locale, cx);
+                // Rows rise into the list; tiles bounce onto the shelf.
+                let (slot, entrance) = match self.builds_layout {
+                    BuildsLayout::List => (div().w_full(), Entrance::Rise),
+                    BuildsLayout::Grid => (div().flex_none(), Entrance::Bounce),
+                };
+                // The layout is in the id so switching it deals the cards again.
+                let id = format!("build-appear-{:?}-{}", self.builds_layout, profile.id);
+                enter(slot.child(card), SharedString::from(id), index, entrance).into_any_element()
+            })
             .collect::<Vec<_>>();
 
         self.builds_collection(cards)
@@ -477,7 +491,7 @@ impl InstancesView {
 
         if self.builds_layout == BuildsLayout::Grid {
             let tile_details = format!("{} {}", loader_title(profile.loader), profile.game_version);
-            return div()
+            let tile = div()
                 .id(format!("build-tile-{profile_id}"))
                 .v_flex()
                 .w(px(TILE_WIDTH))
@@ -594,7 +608,8 @@ impl InstancesView {
                             locale,
                             cx,
                         )),
-                )
+                );
+            return lift_on_hover(tile, format!("build-tile-hover-{profile_id}"), palette)
                 .into_any_element();
         }
 
@@ -713,7 +728,8 @@ impl InstancesView {
                 cx,
             ));
 
-        div()
+        let card = div()
+            .id(format!("build-card-{profile_id}"))
             .v_flex()
             .w_full()
             .gap_3()
@@ -746,8 +762,8 @@ impl InstancesView {
                             status_detail,
                         )),
                 )
-            })
-            .into_any_element()
+            });
+        lift_on_hover(card, format!("build-card-hover-{profile_id}"), palette).into_any_element()
     }
 
     /// Star that pins a build to the top of the lists.
@@ -776,7 +792,7 @@ impl InstancesView {
             }))
             .hover(move |style| style.bg(rgb(palette.hover)))
             .accessibility_label(label)
-            .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+            .tooltip(move |window, cx| Tooltip::new(label).build_animated(window, cx))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.instances.update(cx, |instances, cx| {
                     instances.set_favorite(profile_id, !favorite);
@@ -825,7 +841,7 @@ impl InstancesView {
                     .size_5(),
             )
             // Opens leftwards: the button sits at the right edge of the card.
-            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+            .motion_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                 let menu = menu.min_w(px(230.));
                 let action = |run: BuildAction| {
                     let owner = owner.clone();
@@ -943,7 +959,7 @@ impl InstancesView {
                 .text_color(rgb(palette.muted))
                 .hover(|style| style.bg(rgb(palette.hover)))
                 .accessibility_label(label)
-                .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+                .tooltip(move |window, cx| Tooltip::new(label).build_animated(window, cx))
                 .child(
                     div()
                         .size_full()
@@ -1151,7 +1167,9 @@ impl InstancesView {
                 .hover(|style| style.bg(rgb(0x3b1b1b)))
                 .disabled(is_busy || scan_loading)
                 .accessibility_label(removal_label.clone())
-                .tooltip(move |window, cx| Tooltip::new(removal_label.clone()).build(window, cx))
+                .tooltip(move |window, cx| {
+                    Tooltip::new(removal_label.clone()).build_animated(window, cx)
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.catalog.update(cx, |catalog, cx| {
                         catalog.uninstall_mod(removal_filename.clone(), profile_id, cx)
@@ -1191,8 +1209,13 @@ impl InstancesView {
                                 profile_id.uuid().as_simple()
                             ))
                             .cursor_pointer()
+                            // The column would stretch the button and Button
+                            // centres its content: keep it under the name.
+                            .self_start()
+                            .max_w_full()
                             .h_flex()
                             .items_center()
+                            .justify_start()
                             .gap_1p5()
                             .text_size(px(11.))
                             .text_color(rgb(sub_color))
@@ -1202,7 +1225,7 @@ impl InstancesView {
                                     locale
                                         .text("Все проекты автора", "All projects by this author"),
                                 )
-                                .build(window, cx)
+                                .build_animated(window, cx)
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let name = author_name.clone();
@@ -1287,7 +1310,7 @@ impl InstancesView {
                             .hover(|style| style.opacity(0.85))
                             .tooltip(move |window, cx| {
                                 Tooltip::new(locale.text("Сменить иконку", "Change icon"))
-                                    .build(window, cx)
+                                    .build_animated(window, cx)
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.choose_build_icon(profile_id, cx);
@@ -1346,7 +1369,7 @@ impl InstancesView {
                                     .hover(|style| style.bg(rgb(palette.hover)))
                                     .accessibility_label(folder_label)
                                     .tooltip(move |window, cx| {
-                                        Tooltip::new(folder_label).build(window, cx)
+                                        Tooltip::new(folder_label).build_animated(window, cx)
                                     })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.open_profile_directory(profile_id, cx);
@@ -1519,7 +1542,7 @@ impl InstancesView {
                 }))
                 .hover(|style| style.bg(rgb(palette.hover)))
                 .accessibility_label(label)
-                .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+                .tooltip(move |window, cx| Tooltip::new(label).build_animated(window, cx))
                 .child(icon)
         };
         let toolbar = div()
@@ -1531,10 +1554,17 @@ impl InstancesView {
                     .flex_1()
                     .text_size(px(12.))
                     .text_color(rgb(palette.muted))
-                    .child(locale.text(
-                        "Вывод игры за последний запуск",
-                        "Game output of the latest launch",
-                    )),
+                    .child(if self.log_follow {
+                        locale.text(
+                            "Вывод игры за последний запуск",
+                            "Game output of the latest launch",
+                        )
+                    } else {
+                        locale.text(
+                            "Журнал остановлен, чтобы его можно было выделять. Новые строки — по кнопке со стрелкой",
+                            "The log is held so it can be selected. Press the arrow for new lines",
+                        )
+                    }),
             )
             .child(
                 tool(
@@ -1562,6 +1592,8 @@ impl InstancesView {
                     false,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    // A held log would keep showing the cleared text.
+                    this.log_follow = true;
                     this.instances.update(cx, |instances, cx| {
                         instances.clear_game_log(profile_id);
                         cx.notify();
@@ -1599,21 +1631,44 @@ impl InstancesView {
             .gap_2()
             .child(toolbar)
             .child(
+                // The frame holds the scrollbar over the scrolled text, so
+                // the bar stays put while the lines move.
                 div()
-                    .id(format!("game-log-scroll-{profile_id}"))
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .p_3()
                     .rounded(px(10.))
                     .bg(rgb(palette.surface))
                     .border_1()
                     .border_color(rgb(palette.border))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.log_scroll)
-                    .font_family(cx.theme().mono_font_family.clone())
-                    .text_size(px(12.))
-                    .text_color(rgb(palette.foreground))
-                    .child(body),
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id(format!("game-log-scroll-{profile_id}"))
+                            .size_full()
+                            .p_3()
+                            .pr_5()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.log_scroll)
+                            // Selecting or scrolling back holds the log, so
+                            // new lines do not move the text under the cursor.
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| this.hold_log(cx)),
+                            )
+                            .on_scroll_wheel(cx.listener(
+                                |this, event: &ScrollWheelEvent, _, cx| {
+                                    if event.delta.pixel_delta(px(16.)).y > px(0.) {
+                                        this.hold_log(cx);
+                                    }
+                                },
+                            ))
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_size(px(12.))
+                            .text_color(rgb(palette.foreground))
+                            .child(body),
+                    )
+                    .child(Scrollbar::vertical(&self.log_scroll)),
             )
             .into_any_element()
     }

@@ -3,6 +3,7 @@ use crate::features::mods::ProjectKind;
 use crate::features::mods::catalog::*;
 use crate::features::versions::loader_title;
 use crate::features::versions::*;
+use crate::shared::motion::DialogMotion as _;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -56,7 +57,7 @@ impl CatalogView {
             dialog
                 .w(px(500.))
                 .title(title.clone())
-                .content(move |content, _, _| {
+                .animated_content(move |content, _, _| {
                     if content_profiles.is_empty() {
                         let create_owner = content_owner.clone();
                         return content.child(

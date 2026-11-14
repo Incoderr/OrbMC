@@ -1,10 +1,13 @@
 use super::SettingsView;
 use crate::features::settings::*;
+use crate::shared::motion::MenuMotion as _;
+use crate::shared::motion::TooltipMotion as _;
+use crate::shared::motion::{SpringHover as _, appear, mix_rgb};
 use crate::shared::ui::selectable;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, Disableable, StyledExt};
 use gpui_kit::component::button::Button as ComponentButton;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Theme, ThemeMode, tooltip::Tooltip};
@@ -31,7 +34,7 @@ impl SettingsView {
                     .child(IconName::ChevronDown),
             )
             .accessibility_label(locale.text("Язык интерфейса", "Interface language"))
-            .dropdown_menu(move |menu, _, _| {
+            .motion_menu(move |menu, _, _| {
                 let russian_owner = russian_owner.clone();
                 let english_owner = english_owner.clone();
                 menu.item(
@@ -549,7 +552,7 @@ impl SettingsView {
                     .active(|style| style.opacity(0.72))
                     .selected(is_selected)
                     .accessibility_label(label)
-                    .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+                    .tooltip(move |window, cx| Tooltip::new(label).build_animated(window, cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.settings.update(cx, |settings, cx| {
                             settings.set_accent(color);
@@ -592,7 +595,7 @@ impl SettingsView {
             .hover(|style| style.opacity(0.84))
             .selected(custom_selected)
             .accessibility_label(custom_label)
-            .tooltip(move |window, cx| Tooltip::new(custom_label).build(window, cx))
+            .tooltip(move |window, cx| Tooltip::new(custom_label).build_animated(window, cx))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.palette_open = !this.palette_open;
                 if this.palette_open {
@@ -681,8 +684,8 @@ impl SettingsView {
             .pr_4()
             .overflow_y_scrollbar()
             .gap_4()
-            .child(general_card)
-            .child(appearance_card)
+            .child(appear(general_card, "settings-general-appear", 1))
+            .child(appear(appearance_card, "settings-appearance-appear", 3))
             .into_any_element()
     }
 }
@@ -695,40 +698,48 @@ fn setting_row(
     control: AnyElement,
     palette: Palette,
 ) -> AnyElement {
+    let hint = hint.into();
+    // Under the pointer the icon takes the accent colour and the text nudges
+    // right, so it is clear which control belongs to which line.
+    let label = move |hover: f32| {
+        div()
+            .h_flex()
+            .flex_1()
+            .min_w_0()
+            .items_center()
+            .gap_3()
+            .pl(px(4. * hover.max(0.)))
+            .text_color(mix_rgb(palette.muted, palette.accent, hover))
+            .child(icon)
+            .child(
+                div()
+                    .v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(rgb(palette.foreground))
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette.muted))
+                            .child(hint),
+                    ),
+            )
+    };
     div()
+        .id(title)
         .h_flex()
         .items_center()
         .justify_between()
         .gap_3()
-        .child(
-            div()
-                .h_flex()
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .gap_3()
-                .text_color(rgb(palette.muted))
-                .child(icon)
-                .child(
-                    div()
-                        .v_flex()
-                        .min_w_0()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .text_color(rgb(palette.foreground))
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette.muted))
-                                .child(hint.into()),
-                        ),
-                ),
+        .spring_hover(
+            SharedString::from(format!("setting-hover-{title}")),
+            move |row, hover| row.child(label(hover)).child(control),
         )
-        .child(control)
         .into_any_element()
 }
 

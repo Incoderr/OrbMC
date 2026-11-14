@@ -2,6 +2,7 @@ use super::widgets::{build_icon, format_ago};
 use super::{InstancesView, InstancesViewEvent};
 use crate::features::settings::*;
 use crate::features::worlds::RecentWorld;
+use crate::shared::motion::{Entrance, enter, lift_on_hover};
 use crate::shared::theme::Palette;
 use gpui_kit::base::{Button as UiButton, StyledExt};
 use gpui_kit::component::scroll::ScrollableElement;
@@ -20,6 +21,17 @@ impl InstancesView {
             .recent_worlds
             .iter()
             .filter_map(|world| self.recent_world_row(world, palette, locale, cx))
+            .enumerate()
+            .map(|(index, row)| {
+                // Recent worlds slide in from the side, apart from the cards below.
+                enter(
+                    div().w_full().child(row),
+                    ("world-appear", index),
+                    index,
+                    Entrance::FromLeft,
+                )
+                .into_any_element()
+            })
             .collect::<Vec<_>>();
         div()
             .v_flex()
@@ -109,69 +121,79 @@ impl InstancesView {
             None => build_icon(profile, size),
         };
 
+        let row_id = format!("recent-world-row-{profile_id}-{}", world.folder);
+        let hover_id = format!("recent-world-hover-{profile_id}-{}", world.folder);
         Some(
-            div()
-                .h_flex()
-                .w_full()
-                .items_center()
-                .gap_3()
-                .p_3()
-                .rounded(px(14.))
-                .bg(rgb(palette.surface))
-                .border_1()
-                .border_color(rgb(palette.border))
-                .child(icon)
-                .child(
-                    div()
-                        .v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_size(px(15.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(palette.foreground))
-                                .truncate()
-                                .child(world.folder.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.muted))
-                                .truncate()
-                                .child(format!("{} · {ago}", profile.name)),
-                        ),
-                )
-                .child(
-                    UiButton::new(format!("recent-world-{profile_id}-{}", world.folder))
-                        .cursor_pointer()
-                        .flex_none()
-                        .h(px(40.))
-                        .px_5()
-                        .rounded(px(10.))
-                        .bg(rgb(palette.accent))
-                        .text_color(rgb(palette.accent_foreground))
-                        .hover(|style| style.opacity(0.9))
-                        .disabled(is_busy)
-                        .accessibility_label(locale.text("Играть в этом мире", "Play this world"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.launch_into(profile_id, Some(folder.clone()), cx);
-                        }))
-                        .child(
-                            div()
-                                .h_full()
-                                .h_flex()
-                                .items_center()
-                                .gap_2()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(
-                                    gpui_kit::component::Icon::empty().path("icons/play-fill.svg"),
-                                )
-                                .child(locale.text("Играть", "Play")),
-                        ),
-                )
-                .into_any_element(),
+            lift_on_hover(
+                div()
+                    .id(row_id)
+                    .h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_3()
+                    .p_3()
+                    .rounded(px(14.))
+                    .bg(rgb(palette.surface))
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .child(icon)
+                    .child(
+                        div()
+                            .v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(palette.foreground))
+                                    .truncate()
+                                    .child(world.folder.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette.muted))
+                                    .truncate()
+                                    .child(format!("{} · {ago}", profile.name)),
+                            ),
+                    )
+                    .child(
+                        UiButton::new(format!("recent-world-{profile_id}-{}", world.folder))
+                            .cursor_pointer()
+                            .flex_none()
+                            .h(px(40.))
+                            .px_5()
+                            .rounded(px(10.))
+                            .bg(rgb(palette.accent))
+                            .text_color(rgb(palette.accent_foreground))
+                            .hover(|style| style.opacity(0.9))
+                            .disabled(is_busy)
+                            .accessibility_label(
+                                locale.text("Играть в этом мире", "Play this world"),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.launch_into(profile_id, Some(folder.clone()), cx);
+                            }))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(
+                                        gpui_kit::component::Icon::empty()
+                                            .path("icons/play-fill.svg"),
+                                    )
+                                    .child(locale.text("Играть", "Play")),
+                            ),
+                    ),
+                hover_id,
+                palette,
+            )
+            .into_any_element(),
         )
     }
 }

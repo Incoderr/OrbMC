@@ -19,6 +19,7 @@ use super::{SkinId, SkinModel, SkinState};
 use crate::features::auth::AuthState;
 use crate::features::settings::SettingsState;
 use crate::shared::locale::Locale;
+use crate::shared::motion::{Entrance, SpringHover as _, enter, mix_rgb};
 use crate::shared::theme::Palette;
 
 pub struct SkinsView {
@@ -565,75 +566,85 @@ fn skin_page(this: &mut SkinsView, cx: &mut Context<SkinsView>) -> AnyElement {
                 .into_any_element(),
         );
     }
-    for skin in this.skins.skins().to_vec() {
+    for (index, skin) in this.skins.skins().to_vec().into_iter().enumerate() {
         let image = this.skins.thumbnail(skin.id);
         let active = selected == Some(skin.id);
         let id = skin.id;
-        gallery.push(
-            UiButton::new(format!("saved-skin-{id}"))
-                .cursor_pointer()
-                .w(px(126.))
-                .h(px(168.))
-                .flex_shrink_0()
-                .v_flex()
-                .items_center()
-                .justify_between()
-                .gap_1()
-                .p_1()
-                .rounded(px(10.))
-                .bg(rgb(if active {
-                    palette.selected
-                } else {
-                    palette.surface
-                }))
-                .border_1()
-                .border_color(rgb(if active {
-                    palette.accent
-                } else {
-                    palette.border
-                }))
-                .hover(|style| style.bg(rgb(palette.hover)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.message = this.skins.select(id).err();
-                    this.yaw = -0.24;
-                    this.preview_request = None;
-                    this.request_skin_preview(cx);
-                    cx.notify();
-                }))
-                .when_some(image, |card, image| {
-                    card.child(
-                        img(image)
-                            .w(px(116.))
-                            .h(px(136.))
-                            .object_fit(ObjectFit::Contain),
-                    )
-                })
-                .when(this.skins.thumbnail(skin.id).is_none(), |card| {
-                    card.child(
-                        div()
-                            .w(px(116.))
-                            .h(px(136.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(rgb(palette.muted))
-                            .child(IconName::LoaderCircle),
-                    )
-                })
-                .child(
-                    div()
-                        .w_full()
-                        .px_1()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(rgb(if active {
-                            palette.accent
-                        } else {
-                            palette.foreground
-                        }))
-                        .child(skin.name),
+        let card = UiButton::new(format!("saved-skin-{id}"))
+            .cursor_pointer()
+            .w(px(126.))
+            .h(px(168.))
+            .flex_shrink_0()
+            .v_flex()
+            .items_center()
+            .justify_between()
+            .gap_1()
+            .p_1()
+            .rounded(px(10.))
+            .bg(rgb(if active {
+                palette.selected
+            } else {
+                palette.surface
+            }))
+            .border_1()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.message = this.skins.select(id).err();
+                this.yaw = -0.24;
+                this.preview_request = None;
+                this.request_skin_preview(cx);
+                cx.notify();
+            }))
+            .when_some(image, |card, image| {
+                card.child(
+                    img(image)
+                        .w(px(116.))
+                        .h(px(136.))
+                        .object_fit(ObjectFit::Contain),
                 )
-                .into_any_element(),
+            })
+            .when(this.skins.thumbnail(skin.id).is_none(), |card| {
+                card.child(
+                    div()
+                        .w(px(116.))
+                        .h(px(136.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(rgb(palette.muted))
+                        .child(IconName::LoaderCircle),
+                )
+            })
+            .child(
+                div()
+                    .w_full()
+                    .px_1()
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(rgb(if active {
+                        palette.accent
+                    } else {
+                        palette.foreground
+                    }))
+                    .child(skin.name),
+            );
+        // The picked skin keeps its accent border; the others light up on hover.
+        let card = card.spring_hover(format!("saved-skin-hover-{id}"), move |card, hover| {
+            let border = if active {
+                rgb(palette.accent)
+            } else {
+                mix_rgb(palette.border, palette.accent, hover * 0.8)
+            };
+            card.relative().top(px(-4. * hover)).border_color(border)
+        });
+        gallery.push(
+            // Skins hop onto the shelf one after another.
+            enter(
+                div().flex_shrink_0().child(card),
+                SharedString::from(format!("saved-skin-appear-{id}")),
+                index,
+                Entrance::Bounce,
+            )
+            .into_any_element(),
         );
     }
 

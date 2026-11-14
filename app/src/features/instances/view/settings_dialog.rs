@@ -1,5 +1,6 @@
 use super::InstancesView;
 use crate::features::settings::*;
+use crate::shared::motion::DialogMotion as _;
 use crate::shared::ui::field_label;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Button as UiButton, StyledExt};
@@ -53,7 +54,7 @@ impl InstancesView {
             dialog
                 .w(px(520.))
                 .title(title.clone())
-                .content(move |content, _, cx| {
+                .animated_content(move |content, _, cx| {
                     let current_profile = content_owner
                         .upgrade()
                         .and_then(|owner| owner.read(cx).instances.read(cx).profile(id).cloned());
@@ -419,7 +420,7 @@ impl InstancesView {
             dialog
                 .w(px(460.))
                 .title(title)
-                .content(move |content, _, _| {
+                .animated_content(move |content, _, _| {
                     let action_owner = delete_owner.clone();
                     content.child(
                         div()
