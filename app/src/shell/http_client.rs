@@ -39,7 +39,7 @@ impl ReqwestHttpClient {
         &self,
         parts: http_client::http::request::Parts,
         request_body: Vec<u8>,
-    ) -> http_client::Result<http_client::Response<AsyncBody>> {
+    ) -> gpui_kit::Result<http_client::Response<AsyncBody>> {
         let redirect_policy = parts
             .extensions
             .get::<RedirectPolicy>()
@@ -102,7 +102,7 @@ impl HttpClient for ReqwestHttpClient {
     fn send(
         &self,
         request: http_client::Request<AsyncBody>,
-    ) -> BoxFuture<'static, http_client::Result<http_client::Response<AsyncBody>>> {
+    ) -> BoxFuture<'static, gpui_kit::Result<http_client::Response<AsyncBody>>> {
         let client = self.clone();
         Box::pin(async move {
             let (parts, mut body) = request.into_parts();
@@ -118,7 +118,7 @@ impl HttpClient for ReqwestHttpClient {
 
             receiver
                 .await
-                .map_err(|_| http_client::anyhow!("HTTP worker ended without a response"))?
+                .map_err(|_| std::io::Error::other("HTTP worker ended without a response"))?
         })
     }
 }

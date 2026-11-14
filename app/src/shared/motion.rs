@@ -14,8 +14,8 @@
 //! ```
 
 use super::theme::Palette;
-use gpui_kit::component;
 use gpui_kit::*;
+use gpui_kit::{base, component};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -190,7 +190,9 @@ impl TooltipMotion for component::tooltip::Tooltip {
 }
 
 /// GPUI builds a fresh tooltip view each time one shows, so the entrance
-/// plays on every show.
+/// plays on every show. There is no exit: GPUI drops the tooltip in the frame
+/// the pointer leaves its trigger, so nothing is left to animate out. A
+/// `TransitionState` would outlive the element, but not keep it painted.
 struct AnimatedTooltip(AnyView);
 
 impl Render for AnimatedTooltip {
@@ -199,7 +201,9 @@ impl Render for AnimatedTooltip {
     }
 }
 
-/// Dialog bodies that spring up into the window.
+/// Dialog bodies that spring up into the window. Closing needs nothing from
+/// us: since gpui-component 0.8.1 a dialog stays mounted while it closes and
+/// plays its own entrance (the surface sliding down) backwards.
 pub(crate) trait DialogMotion {
     /// Like `Dialog::content`, with a springy entrance for the body.
     fn animated_content(
@@ -245,8 +249,9 @@ type MenuBuilder = Rc<
     ) -> component::menu::PopupMenu,
 >;
 
-/// Dropdown menus that fall out of their button. Same use as
-/// gpui-component's `DropdownMenu`, which shows its menu without motion.
+/// Dropdown menus that fall out of their button and fade back into it when
+/// dismissed. Same use as gpui-component's `DropdownMenu`, which shows and
+/// hides its menu without motion.
 pub(crate) trait MenuMotion: Sized {
     fn motion_menu_with_anchor(
         self,
@@ -306,21 +311,76 @@ pub(crate) struct MotionMenu {
     builder: MenuBuilder,
 }
 
+/// How long a closing menu takes to fade back into its button.
+const MENU_EXIT: Duration = Duration::from_millis(120);
+/// How far it rises while doing so: the way back of [`Entrance::Drop`].
+const MENU_EXIT_RISE: f32 = 6.;
+
+/// Open state of one [`MotionMenu`], kept by the element between renders.
+#[derive(Default)]
+struct MenuState {
+    /// What the user asked for: false as soon as the menu is dismissed.
+    open: bool,
+    /// Whether the popover is shown: stays true until the exit has played.
+    shown: bool,
+    /// Built once per opening, kept until the menu is gone.
+    menu: Option<Entity<component::menu::PopupMenu>>,
+}
+
+impl MenuState {
+    fn close(&mut self, cx: &mut Context<Self>) {
+        if self.open {
+            self.open = false;
+            cx.notify();
+        }
+    }
+}
+
 impl RenderOnce for MotionMenu {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        // The menu is built once per opening and kept while it is open; the
-        // popover asks for its content on every render.
-        let slot = window.use_keyed_state(self.id.clone(), cx, |_, _| {
-            None::<Entity<component::menu::PopupMenu>>
-        });
+        // The popover is controlled: a dismissal only clears `open`, and the
+        // popover stays mounted until the menu has animated out. Changes to
+        // the state re-render the view that holds this element.
+        let state = window.use_keyed_state(self.id.clone(), cx, |_, _| MenuState::default());
+        let presence_id = SharedString::from(format!("menu-presence:{:?}", self.id));
         let builder = self.builder;
         component::popover::Popover::new(SharedString::from(format!("popover:{:?}", self.id)))
             .appearance(false)
             .overlay_closable(false)
             .trigger(self.trigger)
             .anchor(self.anchor)
+            .open(state.read(cx).shown)
+            .on_open_change({
+                let state = state.clone();
+                move |open, _, cx| {
+                    state.update(cx, |state, cx| {
+                        if *open {
+                            state.open = true;
+                            state.shown = true;
+                            cx.notify();
+                        } else {
+                            state.close(cx);
+                        }
+                    })
+                }
+            })
             .content(move |_, window, cx| {
-                let menu = match slot.read(cx).clone() {
+                let open = state.read(cx).open;
+                let presence = base::motion::Presence::new(presence_id.clone(), open)
+                    .transition(base::motion::Transition::new(MENU_EXIT))
+                    .sample(window, cx);
+                if !presence.should_render() {
+                    // The exit has played: let the popover close for real,
+                    // which also gives focus back to where it was.
+                    state.update(cx, |state, cx| {
+                        state.shown = false;
+                        state.menu = None;
+                        cx.notify();
+                    });
+                    return div().into_any_element();
+                }
+
+                let menu = match state.read(cx).menu.clone() {
                     Some(menu) => menu,
                     None => {
                         let builder = builder.clone();
@@ -329,25 +389,46 @@ impl RenderOnce for MotionMenu {
                             cx,
                             move |menu, window, cx| builder(menu, window, cx),
                         );
-                        slot.update(cx, |slot, _| *slot = Some(menu.clone()));
+                        state.update(cx, |state, _| state.menu = Some(menu.clone()));
                         menu.focus_handle(cx).focus(window, cx);
-                        // Weak handles: the listener lives as long as the
-                        // menu, which the slot owns.
-                        let popover = cx.entity().downgrade();
-                        let weak_slot = slot.downgrade();
+                        // Weak: the listener lives as long as the menu, which
+                        // the state owns.
+                        let weak_state = state.downgrade();
                         window
-                            .subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
-                                if let Some(popover) = popover.upgrade() {
-                                    popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                                }
-                                let _ = weak_slot.update(cx, |slot, _| *slot = None);
+                            .subscribe(&menu, cx, move |_, _: &DismissEvent, _, cx| {
+                                let _ = weak_state.update(cx, |state, cx| state.close(cx));
                             })
                             .detach();
                         menu
                     }
                 };
                 // Not rendered while closed, so each opening plays it again.
-                enter(div().child(menu), "menu-in", 0, Entrance::Drop)
+                let menu = enter(div().child(menu), "menu-in", 0, Entrance::Drop);
+                if open {
+                    return menu.into_any_element();
+                }
+
+                // Leaving: the menu fades back into its button and no longer
+                // takes clicks or keys, so an item cannot fire twice.
+                let away = 1. - presence.progress;
+                div()
+                    .relative()
+                    .top(px(-MENU_EXIT_RISE * away))
+                    .opacity(presence.progress)
+                    .capture_key_down(|_, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    })
+                    .child(menu)
+                    .child(
+                        div()
+                            .id("menu-exit-shield")
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .on_any_mouse_down(|_, _, cx| cx.stop_propagation()),
+                    )
+                    .into_any_element()
             })
     }
 }
@@ -367,10 +448,12 @@ pub(crate) fn mix_rgb(from: u32, to: u32, progress: f32) -> Rgba {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: it would bring in GPUI's own `test` attribute.
-    use super::{BOUNCY, SNAPPY, SpringHover as _, mix_rgb};
+    use super::{BOUNCY, MenuMotion as _, SNAPPY, SpringHover as _, mix_rgb};
+    use gpui_kit::component;
     use gpui_kit::{
-        AppContext as _, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-        Styled as _, TestAppContext, Window, div, point, px, rgb,
+        AppContext as _, Context, InteractiveElement as _, IntoElement, Modifiers,
+        ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
+        point, px, rgb,
     };
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -424,6 +507,62 @@ mod tests {
         assert!(leaving > 0. && leaving < 1.2, "{leaving}");
         let rested = move_pointer_and_wait(400., Duration::from_secs(2));
         assert!(rested.abs() < 0.001, "{rested}");
+    }
+
+    /// A motion menu on a button in the window's corner.
+    struct MenuProbe;
+
+    impl Render for MenuProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                component::button::Button::new("menu-trigger")
+                    .label("Open")
+                    .motion_menu(|menu, _, _| {
+                        menu.item(component::menu::PopupMenuItem::element(|_, _| {
+                            div().debug_selector(|| "menu-item".into()).child("Item")
+                        }))
+                    }),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn dismissed_menu_animates_out_before_it_closes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            component::Theme::change(component::ThemeMode::Dark, None, cx);
+        });
+        let (_, cx) = cx.add_window_view(|_, _| MenuProbe);
+        let frame = |cx: &mut VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.refresh();
+                _ = window.draw(cx);
+            });
+            cx.run_until_parked();
+        };
+        frame(cx);
+
+        cx.simulate_click(point(px(10.), px(10.)), Modifiers::default());
+        frame(cx);
+        assert!(cx.debug_bounds("menu-item").is_some(), "the menu opens");
+        // Let it finish appearing: a menu dismissed mid-entrance leaves from
+        // where it got to, which at the very start is nowhere.
+        cx.executor().advance_clock(Duration::from_millis(500));
+        frame(cx);
+
+        cx.simulate_keystrokes("escape");
+        frame(cx);
+        assert!(
+            cx.debug_bounds("menu-item").is_some(),
+            "a dismissed menu stays on screen while it leaves"
+        );
+
+        cx.executor().advance_clock(Duration::from_millis(500));
+        for _ in 0..3 {
+            frame(cx);
+        }
+        assert!(cx.debug_bounds("menu-item").is_none(), "and then closes");
     }
 
     #[test]

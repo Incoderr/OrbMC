@@ -1,8 +1,10 @@
 # GPUI inspector compatibility patch
 
-`gpui-pre/` is the unchanged crates.io distribution of `gpui-pre` 0.3.7 except
-for the inspector fixes described below. Its original licenses and source
-metadata are retained. The workspace uses it through `[patch.crates-io]`.
+`gpui-pre/` is the unchanged crates.io distribution of `gpui-pre` 0.3.12 (the
+exact version GPUI Kit 0.9.1 requires) except for the inspector fixes
+described below. Its original licenses and source metadata are retained. The
+workspace uses it through `[patch.crates-io]`. The fixes were first made on
+0.3.7; 0.3.12 still lacks them, so they were carried over unchanged.
 
 Changes:
 

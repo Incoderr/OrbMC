@@ -9,7 +9,7 @@ disagree, trust the code and update this file in the same change.
 
 ## 1. Project in one paragraph
 
-OrbMC is a desktop Minecraft launcher. The UI is GPUI through `gpui-kit`
+OrbMC is a desktop Minecraft launcher. The UI is GPUI through `gpui-kit` 0.9
 (`gpui-component` primitives). Launcher logic is Rust. Java is only the
 runtime that Minecraft itself needs; the launcher never depends on Java. No
 web runtime (Electron, Tauri, WebView, React, Node.js) unless the user
@@ -38,7 +38,7 @@ core/                        library crate `orbmc-core` (no GPUI): version
 vendor/
   mc-launcher-core/          patched copy of mc-launcher-core 0.1.2 — the real
                              install/launch engine (see §3)
-  gpui-pre/                  patched copy of gpui-pre 0.3.7 (inspector fixes)
+  gpui-pre/                  patched copy of gpui-pre 0.3.12 (inspector fixes)
 assets/logo/                 application icon (embedded by app/build.rs)
 assets/icons/remix/          Remix Icon SVGs (Apache-2.0), see `shell/icons.rs`
 installer/orbmc.iss          Windows installer (Inno Setup)
@@ -63,7 +63,10 @@ Both vendored crates are used through `[patch.crates-io]` in the root
   NeoForge installation, Java runtime install, launch command construction,
   offline and Microsoft account helpers. OrbMC calls it from
   `features/instances/worker.rs`.
-- `vendor/gpui-pre` only carries inspector fixes.
+- `vendor/gpui-pre` only carries inspector fixes. GPUI Kit pins gpui-pre to
+  an exact version (`=0.3.12` for 0.9.1), so updating GPUI Kit means moving
+  this copy to the new version and carrying the fixes over (or dropping it
+  once upstream has them).
 
 Rules:
 
@@ -174,6 +177,13 @@ These are the conventions the code already follows. Use them for new work.
 - **Input changes.** `InputState::set_value` does **not** emit
   `InputEvent::Change`; apply the effect yourself after setting a value in
   code.
+- **Motion.** Springs (`with_spring`, `spring_hover`, `enter`/`Entrance`) are
+  ours, in `shared::motion`; gpui-kit has none. Menus (`motion_menu`) and
+  dialogs (`window.open_dialog`) animate out when closed; tooltips cannot,
+  because GPUI drops them in the frame the pointer leaves. For an exit use
+  `base::motion::Presence`, for a value that must outlive its element
+  `base::motion::TransitionState`. Animations run on the executor's clock:
+  tests move it with `cx.executor().advance_clock(...)`.
 
 ## 6. Project rules
 

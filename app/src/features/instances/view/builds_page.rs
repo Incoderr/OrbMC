@@ -1656,13 +1656,11 @@ impl InstancesView {
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| this.hold_log(cx)),
                             )
-                            .on_scroll_wheel(cx.listener(
-                                |this, event: &ScrollWheelEvent, _, cx| {
-                                    if event.delta.pixel_delta(px(16.)).y > px(0.) {
-                                        this.hold_log(cx);
-                                    }
-                                },
-                            ))
+                            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
+                                if event.delta.pixel_delta(px(16.)).y > px(0.) {
+                                    this.hold_log(cx);
+                                }
+                            }))
                             .font_family(cx.theme().mono_font_family.clone())
                             .text_size(px(12.))
                             .text_color(rgb(palette.foreground))
