@@ -4,6 +4,7 @@
 mod builds_page;
 mod export_dialog;
 mod home_page;
+mod loader_update;
 mod pack_import;
 mod settings_dialog;
 pub(crate) mod widgets;
@@ -66,6 +67,8 @@ pub struct InstancesView {
     builds_layout: crate::features::settings::BuildsLayout,
     /// Last played worlds for the home page, newest first.
     recent_worlds: Vec<crate::features::worlds::RecentWorld>,
+    /// Loader builds offered by the open "change loader version" dialog.
+    loader_builds: loader_update::LoaderBuilds,
     _subscriptions: [Subscription; 4],
 }
 
@@ -131,6 +134,7 @@ impl InstancesView {
             settings: settings.clone(),
             builds_layout,
             recent_worlds: Vec::new(),
+            loader_builds: Default::default(),
             _subscriptions: subscriptions,
         };
         view.refresh_recent_worlds(cx);

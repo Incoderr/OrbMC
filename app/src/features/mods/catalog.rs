@@ -614,6 +614,113 @@ pub async fn install_compatible_mod(
     Ok(ModInstallOutcome { installed, files })
 }
 
+/// Mod files (of `(project id, file name)` pairs) whose newest compatible
+/// file differs from the installed one: exactly the ones
+/// `update_installed_mod` would replace. A failed lookup counts as "no
+/// update" and is only logged.
+pub async fn find_mod_updates(
+    client: Arc<dyn HttpClient>,
+    mods: Vec<(String, String)>,
+    compatibility: ModCompatibilityFilter,
+    curseforge: Option<CurseForgeApi>,
+) -> std::collections::HashSet<String> {
+    use futures::StreamExt as _;
+
+    let compatibility = &compatibility;
+    let curseforge = curseforge.as_ref();
+    futures::stream::iter(mods)
+        .map(|(project_id, filename)| {
+            let client = client.clone();
+            async move {
+                let source = project_source(&project_id);
+                match resolve_compatible_mod_file(
+                    client,
+                    &project_id,
+                    source,
+                    compatibility,
+                    curseforge,
+                )
+                .await
+                {
+                    Ok((file, _, _)) => (file.filename != filename).then_some(filename),
+                    Err(error) => {
+                        tracing::debug!(project = %project_id, error = %error.message, "mod update check failed");
+                        None
+                    }
+                }
+            }
+        })
+        .buffer_unordered(4)
+        .filter_map(futures::future::ready)
+        .collect()
+        .await
+}
+
+/// Provider of a prefixed project id (`modrinth:…`, `curseforge:…`).
+fn project_source(project_id: &str) -> ModSource {
+    if project_id.starts_with("curseforge:") {
+        ModSource::CurseForge
+    } else {
+        ModSource::Modrinth
+    }
+}
+
+/// One installed mod file to bring to its newest compatible version.
+pub struct ModUpdate {
+    pub project_id: String,
+    pub filename: String,
+    /// Display name, for shortening the provider's version label.
+    pub name: Option<String>,
+    pub compatibility: ModCompatibilityFilter,
+    pub mods_location: super::installed::ModsLocation,
+}
+
+/// Downloads the newest compatible file of an installed mod and swaps it in.
+/// Returns the new file name, or `None` when the installed file is already
+/// the newest one. Dependencies are left alone: they were settled when the
+/// mod was installed.
+pub async fn update_installed_mod(
+    client: Arc<dyn HttpClient>,
+    request: ModUpdate,
+    curseforge: Option<CurseForgeApi>,
+    transfer: Transfer,
+) -> Result<Option<String>, CatalogProviderError> {
+    let ModUpdate {
+        project_id,
+        filename,
+        name,
+        compatibility,
+        mods_location,
+    } = request;
+    let source = project_source(&project_id);
+    let (file, version_label, _) = resolve_compatible_mod_file(
+        client.clone(),
+        &project_id,
+        source,
+        &compatibility,
+        curseforge.as_ref(),
+    )
+    .await?;
+    if file.filename == filename {
+        return Ok(None);
+    }
+    let new_filename =
+        download_file_to_directory(client, file, &mods_location.mods, "jar", "mod", &transfer)
+            .await?;
+    let version = version_label
+        .as_deref()
+        .map(|label| compact_version(name.as_deref(), label));
+    super::installed::replace_file(&mods_location, &filename, &new_filename, version).map_err(
+        |error| {
+            provider_error(
+                source,
+                format!("Mod downloaded, but the old file could not be replaced: {error}"),
+            )
+        },
+    )?;
+    Ok(Some(new_filename))
+}
+
 /// A resource pack or shader to install into a build's game directory.
 pub struct ContentInstall {
     pub project_id: String,

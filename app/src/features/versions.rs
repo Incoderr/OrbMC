@@ -3,10 +3,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Request};
+pub use orbmc_core::minecraft::loaders::LoaderBuild;
 use orbmc_core::minecraft::loaders::{
-    FABRIC_LOADER_MANIFEST_URL, FORGE_PROMOTIONS_URL, FabricGameLoaderManifest,
-    FabricLoaderManifest, ForgeManifest, LoaderRelease, NEOFORGE_LEGACY_MAVEN_METADATA_URL,
-    NEOFORGE_MAVEN_METADATA_URL, NeoForgeManifest,
+    FABRIC_LOADER_MANIFEST_URL, FORGE_MAVEN_METADATA_URL, FORGE_PROMOTIONS_URL,
+    FabricGameLoaderManifest, FabricLoaderManifest, ForgeManifest, LoaderRelease,
+    NEOFORGE_LEGACY_MAVEN_METADATA_URL, NEOFORGE_MAVEN_METADATA_URL, NeoForgeManifest,
+    forge_builds,
 };
 use orbmc_core::minecraft::manifest::{VERSION_MANIFEST_URL, VersionManifest};
 use serde::{Deserialize, Serialize};
@@ -296,6 +298,43 @@ pub async fn fetch_fabric_game_loaders(
     let body = fetch_cached_text(client, &cache_key, &url, "Fabric").await?;
     FabricGameLoaderManifest::parse(body.as_bytes()).map_err(|error| {
         format!("Не удалось разобрать версии Fabric для Minecraft {game_version}: {error}")
+    })
+}
+
+/// Every loader build for `game_version`, newest first; empty for vanilla.
+/// Forge builds are marked stable when Forge recommends them.
+pub async fn fetch_loader_builds(
+    client: Arc<dyn HttpClient>,
+    game_version: String,
+    loader: LoaderChoice,
+) -> Result<Vec<LoaderBuild>, String> {
+    Ok(match loader {
+        LoaderChoice::Vanilla => Vec::new(),
+        LoaderChoice::Forge => {
+            let (maven, promotions) = futures::join!(
+                fetch_cached_text(
+                    client.clone(),
+                    "forge_maven_metadata",
+                    FORGE_MAVEN_METADATA_URL,
+                    "Forge",
+                ),
+                fetch_forge(client),
+            );
+            let recommended = promotions
+                .ok()
+                .and_then(|manifest| manifest.pick(&game_version, LoaderRelease::Stable));
+            forge_builds(&maven?, &game_version)?
+                .into_iter()
+                .map(|version| LoaderBuild {
+                    stable: recommended.as_deref() == Some(version.as_str()),
+                    version,
+                })
+                .collect()
+        }
+        LoaderChoice::Fabric => fetch_fabric_game_loaders(client, game_version)
+            .await?
+            .builds(),
+        LoaderChoice::NeoForge => fetch_neoforge(client).await?.builds(&game_version),
     })
 }
 

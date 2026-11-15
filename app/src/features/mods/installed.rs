@@ -191,6 +191,9 @@ pub fn recorded_projects(location: &ModsLocation) -> HashSet<String> {
 pub struct InstalledModEntry {
     pub filename: String,
     pub disabled: bool,
+    /// Catalog project of the file (`modrinth:…`, `curseforge:…`); `None`
+    /// for hand-added mods the providers do not know.
+    pub project: Option<String>,
     pub name: Option<String>,
     pub author: Option<String>,
     pub version: Option<String>,
@@ -212,6 +215,7 @@ pub fn list_entries(location: &ModsLocation) -> Vec<InstalledModEntry> {
         .map(|record| InstalledModEntry {
             filename: record.filename.clone(),
             disabled: is_disabled(&location.mods, &record.filename),
+            project: record.projects.first().cloned(),
             name: record.name,
             author: record.author,
             version: record.version,
@@ -282,6 +286,39 @@ pub fn record_install(
         version: meta.version.clone(),
         icon_url: meta.icon_url.clone(),
         icon_path: None,
+    });
+    profile_store::write_json_atomically(&location.manifest(), &records).map_err(|e| e.to_string())
+}
+
+/// Swaps a recorded mod file for its freshly downloaded newer version: the
+/// new file inherits the old record's display data and enabled state, the
+/// old file is deleted.
+pub fn replace_file(
+    location: &ModsLocation,
+    old_filename: &str,
+    new_filename: &str,
+    version: Option<String>,
+) -> Result<(), String> {
+    let sha1 = mc_launcher_core::io::hash::sha1_file(location.mods.join(new_filename))
+        .map_err(|e| e.to_string())?;
+    let mut records: Vec<Record> =
+        mod_files::read_json(&location.manifest()).map_err(|e| e.to_string())?;
+    let old = records
+        .iter()
+        .find(|record| record.filename == old_filename)
+        .cloned()
+        .unwrap_or_default();
+    let disabled = is_disabled(&location.mods, old_filename);
+    remove_record_file(&location.mods, old_filename)?;
+    if disabled {
+        set_disabled(&location.mods, new_filename, true)?;
+    }
+    records.retain(|record| record.filename != old_filename && record.filename != new_filename);
+    records.push(Record {
+        filename: new_filename.into(),
+        sha1,
+        version: version.or(old.version),
+        ..old
     });
     profile_store::write_json_atomically(&location.manifest(), &records).map_err(|e| e.to_string())
 }
@@ -1267,6 +1304,36 @@ mod tests {
         state.finish(first, old, Inventory::default());
         assert!(state.contains(first, "modrinth:example"));
         assert!(!state.contains(second, "modrinth:example"));
+    }
+
+    #[test]
+    fn replacing_a_file_keeps_its_record_and_disabled_state() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("a-1.jar"), b"old").unwrap();
+        let meta = InstalledMeta {
+            name: Some("A".into()),
+            ..Default::default()
+        };
+        record_install(&location(&directory), "modrinth:a".into(), "a-1.jar", &meta).unwrap();
+        set_disabled(directory.path(), "a-1.jar", true).unwrap();
+        std::fs::write(directory.path().join("a-2.jar"), b"new").unwrap();
+
+        replace_file(
+            &location(&directory),
+            "a-1.jar",
+            "a-2.jar",
+            Some("2".into()),
+        )
+        .unwrap();
+
+        let entries = list_entries(&location(&directory));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].filename, "a-2.jar");
+        assert!(entries[0].disabled);
+        assert_eq!(entries[0].project.as_deref(), Some("modrinth:a"));
+        assert_eq!(entries[0].name.as_deref(), Some("A"));
+        assert_eq!(entries[0].version.as_deref(), Some("2"));
+        assert!(!directory.path().join("a-1.jar.disabled").exists());
     }
 
     #[test]

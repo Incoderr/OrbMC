@@ -12,6 +12,47 @@ pub const NEOFORGE_MAVEN_METADATA_URL: &str =
 pub const NEOFORGE_LEGACY_MAVEN_METADATA_URL: &str =
     "https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml";
 
+/// Every Forge build, for picking one by hand (promotions list only two).
+pub const FORGE_MAVEN_METADATA_URL: &str =
+    "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml";
+
+/// One loader build offered for a game version.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoaderBuild {
+    pub version: String,
+    /// Recommended / non-beta build.
+    pub stable: bool,
+}
+
+/// Full Forge version ids (`1.20.1-47.2.0`) for `game_version` from Forge
+/// Maven metadata, newest first.
+pub fn forge_builds(xml: &str, game_version: &str) -> Result<Vec<String>, String> {
+    let metadata: MavenMetadata = quick_xml::de::from_str(xml)
+        .map_err(|error| format!("Не удалось разобрать Maven metadata Forge: {error}"))?;
+    let prefix = format!("{game_version}-");
+    let mut builds: Vec<String> = metadata
+        .versioning
+        .versions
+        .version
+        .into_iter()
+        .filter(|version| version.starts_with(&prefix))
+        .collect();
+    builds.sort_by_cached_key(|version| std::cmp::Reverse(version_key(&version[prefix.len()..])));
+    Ok(builds)
+}
+
+/// Numeric sort key of a dotted version (`47.2.10` → `[47, 2, 10]`); text
+/// after a `-` is ignored.
+fn version_key(version: &str) -> Vec<u64> {
+    version
+        .split('-')
+        .next()
+        .unwrap_or_default()
+        .split('.')
+        .map(|part| part.parse().unwrap_or(0))
+        .collect()
+}
+
 /// Which loader build to take when the user does not type one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoaderRelease {
@@ -133,6 +174,17 @@ impl FabricGameLoaderManifest {
         }
         .map(|version| version.version.as_str())
     }
+
+    /// Every loader build for this game version, newest first.
+    pub fn builds(&self) -> Vec<LoaderBuild> {
+        self.versions
+            .iter()
+            .map(|version| LoaderBuild {
+                version: version.version.clone(),
+                stable: version.stable,
+            })
+            .collect()
+    }
 }
 
 #[derive(Deserialize)]
@@ -215,6 +267,19 @@ impl NeoForgeManifest {
         }
         .map(|version| version.version.as_str())
     }
+
+    /// Every build for a game version, newest first.
+    pub fn builds(&self, game_version: &str) -> Vec<LoaderBuild> {
+        self.versions
+            .iter()
+            .rev()
+            .filter(|version| version.minecraft_version == game_version)
+            .map(|version| LoaderBuild {
+                version: version.version.clone(),
+                stable: !build_part(&version.version).contains('-'),
+            })
+            .collect()
+    }
 }
 
 fn build_part(version: &str) -> &str {
@@ -275,6 +340,20 @@ pub fn forge_version_id(game_version: &str, loader_version: &str) -> String {
 #[cfg(test)]
 mod forge_version_tests {
     use super::*;
+
+    #[test]
+    fn forge_builds_are_filtered_by_game_and_sorted_newest_first() {
+        let xml = "<metadata><versioning><versions>\
+            <version>1.20.1-47.2.0</version>\
+            <version>1.20.1-47.10.1</version>\
+            <version>1.20.4-49.0.1</version>\
+            <version>1.20.1-47.3.0</version>\
+            </versions></versioning></metadata>";
+        assert_eq!(
+            forge_builds(xml, "1.20.1").unwrap(),
+            ["1.20.1-47.10.1", "1.20.1-47.3.0", "1.20.1-47.2.0"]
+        );
+    }
 
     #[test]
     fn forge_picks_the_promotion_of_the_channel() {

@@ -10,17 +10,19 @@ mod gallery;
 mod install_dialog;
 pub(crate) mod widgets;
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
 use super::catalog::{
-    ContentInstall, ModInstall, ModProject, ModSource, ModpackRelease, fetch_project_description,
-    fetch_project_info, install_compatible_content, install_compatible_mod, resolve_modpack,
-    search_catalog,
+    ContentInstall, ModInstall, ModProject, ModSource, ModUpdate, ModpackRelease,
+    fetch_project_description, fetch_project_info, find_mod_updates, install_compatible_content,
+    install_compatible_mod, resolve_modpack, search_catalog, update_installed_mod,
 };
 use super::{
     AuthorFilter, ModCompatibilityFilter, ModsState, ProjectKind, installed, mod_loader_filter,
@@ -69,6 +71,11 @@ pub struct CatalogView {
     notice: Option<String>,
     /// Build page currently open; its mod list reloads after scans.
     open_build: Option<InstanceId>,
+    /// Mod files of each build that have a newer compatible version; filled
+    /// by a check when the build page opens.
+    mod_updates: HashMap<InstanceId, HashSet<String>>,
+    /// Builds whose update check is running.
+    checking_updates: HashSet<InstanceId>,
     palette: Palette,
     locale: Locale,
     settings: Entity<SettingsState>,
@@ -149,6 +156,8 @@ impl CatalogView {
             mods_scroll: gpui_kit::base::VirtualListScrollHandle::new(),
             screen: Screen::List,
             open_build: None,
+            mod_updates: HashMap::new(),
+            checking_updates: HashSet::new(),
             notice: None,
             palette,
             locale,
@@ -220,6 +229,7 @@ impl CatalogView {
             CatalogTarget::Build(id) => {
                 self.open_build = Some(id);
                 self.load_installed_entries(id, cx);
+                self.check_mod_updates(id, cx);
                 // The scan enriches legacy records with names, authors and
                 // icons; the listed entries reload when the scan finishes.
                 self.refresh_installed_mods(cx);
@@ -872,6 +882,194 @@ impl CatalogView {
                 );
             }
         }
+    }
+
+    /// Whether the mod file of a build has a newer compatible version.
+    pub fn has_mod_update(&self, id: InstanceId, filename: &str) -> bool {
+        self.mod_updates
+            .get(&id)
+            .is_some_and(|files| files.contains(filename))
+    }
+
+    pub fn mod_update_count(&self, id: InstanceId) -> usize {
+        self.mod_updates.get(&id).map_or(0, HashSet::len)
+    }
+
+    pub fn is_checking_updates(&self, id: InstanceId) -> bool {
+        self.checking_updates.contains(&id)
+    }
+
+    /// Looks up which catalog mods of a build have a newer compatible file.
+    pub(crate) fn check_mod_updates(&mut self, profile_id: InstanceId, cx: &mut Context<Self>) {
+        let Some(profile) = self.instances.read(cx).profile(profile_id).cloned() else {
+            return;
+        };
+        let Ok(location) = profile.mods_location() else {
+            return;
+        };
+        if !self.checking_updates.insert(profile_id) {
+            return;
+        }
+        let compatibility = ModCompatibilityFilter {
+            game_version: profile.game_version.clone(),
+            loader: mod_loader_filter(profile.loader),
+        };
+        let client = cx.http_client();
+        let curseforge = super::curseforge_api();
+        let task = cx.background_executor().spawn(async move {
+            let mods = installed::list_entries(&location)
+                .into_iter()
+                .filter_map(|entry| Some((entry.project?, entry.filename)))
+                .collect();
+            find_mod_updates(client, mods, compatibility, curseforge).await
+        });
+        cx.spawn(async move |this, cx| {
+            let updates = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.checking_updates.remove(&profile_id);
+                this.mod_updates.insert(profile_id, updates);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Updates every mod of the build that has a newer version, one after
+    /// another: a build runs one transfer at a time.
+    pub(crate) fn update_all_mods(
+        &mut self,
+        profile_id: InstanceId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(next) = self
+            .build_mods(profile_id)
+            .iter()
+            .find(|entry| self.has_mod_update(profile_id, &entry.filename))
+            .cloned()
+        else {
+            return;
+        };
+        self.start_mod_update(profile_id, next, true, window, cx);
+    }
+
+    /// Replaces an installed catalog mod with its newest compatible file.
+    pub(crate) fn update_mod(
+        &mut self,
+        profile_id: InstanceId,
+        entry: installed::InstalledModEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_mod_update(profile_id, entry, false, window, cx);
+    }
+
+    /// `then_next` chains the next pending update after this one ("update
+    /// all").
+    fn start_mod_update(
+        &mut self,
+        profile_id: InstanceId,
+        entry: installed::InstalledModEntry,
+        then_next: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project_id) = entry.project.clone() else {
+            return;
+        };
+        let Some(profile) = self.instances.read(cx).profile(profile_id).cloned() else {
+            return;
+        };
+        let previous_runtime = self.instances.read(cx).runtime(&profile_id);
+        if previous_runtime.is_busy() || self.mods.installed.is_loading(profile_id) {
+            return;
+        }
+        let mods_location = match profile.mods_location() {
+            Ok(location) => location,
+            Err(error) => {
+                tracing::warn!(%profile_id, %error, "build data directory is unavailable");
+                return;
+            }
+        };
+        let locale = self.locale;
+        let display_name = entry.name.clone().unwrap_or_else(|| entry.filename.clone());
+        let request = ModUpdate {
+            project_id,
+            filename: entry.filename.clone(),
+            name: entry.name.clone(),
+            compatibility: ModCompatibilityFilter {
+                game_version: profile.game_version.clone(),
+                loader: mod_loader_filter(profile.loader),
+            },
+            mods_location,
+        };
+        let transfer = TransferHandle::default();
+        self.instances.update(cx, |instances, _| {
+            instances.mark_mod_downloading(profile_id, display_name.clone(), transfer.clone())
+        });
+        self.watch_transfer(profile_id, cx);
+        let transfer = Transfer {
+            handle: transfer,
+            executor: cx.background_executor().clone(),
+        };
+        let client = cx.http_client();
+        let curseforge = super::curseforge_api();
+        let task = cx.background_executor().spawn(async move {
+            update_installed_mod(client, request, curseforge, transfer).await
+        });
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let succeeded = result.is_ok();
+                if succeeded && let Some(files) = this.mod_updates.get_mut(&profile_id) {
+                    files.remove(&entry.filename);
+                }
+                let more = then_next && succeeded && this.mod_update_count(profile_id) > 0;
+                match result {
+                    Ok(Some(filename)) => {
+                        tracing::info!(%profile_id, from = %entry.filename, to = %filename, "updated mod");
+                        this.instances.update(cx, |instances, _| {
+                            instances.mark_mod_downloaded(profile_id, filename)
+                        });
+                        this.load_installed_entries(profile_id, cx);
+                    }
+                    Ok(None) => {
+                        this.instances.update(cx, |instances, _| {
+                            instances.restore_runtime(profile_id, previous_runtime)
+                        });
+                        if !then_next {
+                            window.push_notification(
+                                format!(
+                                    "{display_name}: {}",
+                                    locale.text(
+                                        "уже последняя версия",
+                                        "already the latest version"
+                                    )
+                                ),
+                                cx,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%profile_id, error = %error.message, "mod update failed");
+                        this.instances.update(cx, |instances, _| {
+                            instances.mark_mod_download_failed(profile_id, error.message)
+                        });
+                    }
+                }
+                if more {
+                    this.update_all_mods(profile_id, window, cx);
+                } else {
+                    // The inventory scan marks the build as loading, which
+                    // would stop a chain of updates: run it once at the end.
+                    this.refresh_installed_mods(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Removes a mod from a profile's mods directory, then re-scans the

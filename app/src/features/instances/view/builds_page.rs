@@ -826,6 +826,11 @@ impl InstancesView {
             quick_play,
             mod_filter,
         } = menu;
+        let has_loader = self
+            .instances
+            .read(cx)
+            .profile(profile_id)
+            .is_some_and(|profile| profile.loader != LoaderChoice::Vanilla);
         let owner = cx.entity().downgrade();
         ComponentButton::new(format!("more-instance-{profile_id}"))
             .cursor_pointer()
@@ -895,6 +900,16 @@ impl InstancesView {
                             .disabled(is_busy)
                             .on_click(action(|this, id, window, cx| {
                                 this.open_export_dialog(id, window, cx)
+                            })),
+                    )
+                })
+                .when(has_loader, |menu| {
+                    menu.item(
+                        PopupMenuItem::new(locale.text("Версия лоадера…", "Loader version…"))
+                            .icon(IconName::Redo)
+                            .disabled(is_busy)
+                            .on_click(action(|this, id, window, cx| {
+                                this.open_loader_version_picker(id, window, cx)
                             })),
                     )
                 })
@@ -1070,6 +1085,16 @@ impl InstancesView {
         };
         let entries: Vec<installed::InstalledModEntry> =
             self.catalog.read(cx).build_mods(profile_id).to_vec();
+        let updatable: std::collections::HashSet<String> = {
+            let catalog = self.catalog.read(cx);
+            entries
+                .iter()
+                .filter(|entry| catalog.has_mod_update(profile_id, &entry.filename))
+                .map(|entry| entry.filename.clone())
+                .collect()
+        };
+        let update_count = updatable.len();
+        let checking_updates = self.catalog.read(cx).is_checking_updates(profile_id);
 
         let back_button = UiButton::new("instance-details-back")
             .cursor_pointer()
@@ -1178,6 +1203,37 @@ impl InstancesView {
                 .child(IconName::Trash)
                 .into_any_element()];
 
+                // Only mods with a newer compatible file found by the check
+                // get the button; the rest keep an invisible one so the
+                // columns stay aligned.
+                let update_label = locale.text("Обновить мод", "Update mod").to_owned();
+                let can_update = updatable.contains(&row_filename);
+                let update_entry = entry.clone();
+                let update = UiButton::new(format!(
+                    "update-mod-{}-{row_filename}",
+                    profile_id.uuid().as_simple()
+                ))
+                .cursor_pointer()
+                .px_2()
+                .py_2()
+                .rounded(px(6.))
+                .bg(rgb(palette.control))
+                .text_color(rgb(palette.accent))
+                .hover(|style| style.bg(rgb(palette.hover)))
+                .disabled(is_busy || scan_loading || !can_update)
+                .when(!can_update, |button| button.invisible())
+                .accessibility_label(update_label.clone())
+                .tooltip(move |window, cx| {
+                    Tooltip::new(update_label.clone()).build_animated(window, cx)
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let entry = update_entry.clone();
+                    this.catalog.update(cx, |catalog, cx| {
+                        catalog.update_mod(profile_id, entry, window, cx)
+                    });
+                }))
+                .child(IconName::Redo);
+
                 let (label_color, sub_color) = if disabled {
                     (palette.muted, palette.muted)
                 } else {
@@ -1285,6 +1341,7 @@ impl InstancesView {
                     .child(identity)
                     .child(release)
                     .children(uninstalls)
+                    .child(update)
                     .child(toggle)
                     .into_any_element()
             })
@@ -1428,6 +1485,68 @@ impl InstancesView {
                                             "Моды ещё не установлены. Добавьте их из каталога.",
                                             "No mods installed yet. Add them from the catalog.",
                                         ))
+                                    }),
+                            )
+                        },
+                    )
+                    .when(
+                        self.details_tab == DetailsTab::Mods
+                            && !rows.is_empty()
+                            && (checking_updates || update_count > 0),
+                        |section| {
+                            section.child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .pr_4()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette.muted))
+                                    .when(checking_updates, |bar| {
+                                        bar.child(locale.text(
+                                            "Проверяем обновления модов…",
+                                            "Checking for mod updates…",
+                                        ))
+                                    })
+                                    .when(!checking_updates, |bar| {
+                                        bar.child(div().flex_1().child(format!(
+                                                "{} {update_count}",
+                                                locale.text(
+                                                    "Доступно обновлений:",
+                                                    "Updates available:"
+                                                )
+                                            )))
+                                        .child(
+                                            UiButton::new(format!("update-all-mods-{profile_id}"))
+                                                .cursor_pointer()
+                                                .px_3()
+                                                .py_1p5()
+                                                .rounded(px(7.))
+                                                .bg(rgb(palette.accent))
+                                                .text_color(rgb(palette.accent_foreground))
+                                                .hover(|style| style.opacity(0.9))
+                                                .disabled(is_busy || scan_loading)
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.catalog.update(cx, |catalog, cx| {
+                                                            catalog.update_all_mods(
+                                                                profile_id, window, cx,
+                                                            )
+                                                        });
+                                                    },
+                                                ))
+                                                .child(
+                                                    div()
+                                                        .h_flex()
+                                                        .items_center()
+                                                        .gap_1p5()
+                                                        .child(IconName::Redo)
+                                                        .child(
+                                                            locale
+                                                                .text("Обновить все", "Update all"),
+                                                        ),
+                                                ),
+                                        )
                                     }),
                             )
                         },

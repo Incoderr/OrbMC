@@ -403,6 +403,12 @@ impl InstancesState {
             .insert(id, InstanceRuntime::ModDownloaded { filename });
     }
 
+    /// Puts back a runtime state saved before a transfer that changed
+    /// nothing (a mod that was already up to date).
+    pub fn restore_runtime(&mut self, id: InstanceId, runtime: InstanceRuntime) {
+        self.runtime.insert(id, runtime);
+    }
+
     pub fn mark_mod_download_failed(&mut self, id: InstanceId, message: String) {
         self.runtime
             .insert(id, InstanceRuntime::ModDownloadFailed { message });
@@ -609,8 +615,8 @@ impl InstancesState {
         }
     }
 
-    /// Sets the game and loader of a build created from a modpack once the
-    /// pack's own index is known.
+    /// Sets the game and loader of a build: a build created from a modpack
+    /// once the pack's own index is known, or a loader update.
     pub fn set_game(
         &mut self,
         id: InstanceId,
