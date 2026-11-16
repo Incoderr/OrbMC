@@ -64,6 +64,32 @@ pub struct Asset {
     pub browser_download_url: String,
     #[serde(default)]
     pub size: Option<u64>,
+    #[serde(default)]
+    pub id: u64,
+    /// Changes when the asset is re-uploaded under the same name.
+    #[serde(default)]
+    pub updated_at: String,
+    /// `sha256:<hex>`; GitHub fills it for assets uploaded since mid-2025.
+    #[serde(default)]
+    pub digest: Option<String>,
+}
+
+impl Asset {
+    fn sha256(&self) -> Option<String> {
+        self.digest
+            .as_deref()?
+            .strip_prefix("sha256:")
+            .map(str::to_ascii_lowercase)
+    }
+
+    /// Identity of this exact upload: its content hash when GitHub has one,
+    /// otherwise asset id plus upload time.
+    fn revision(&self) -> String {
+        match self.sha256() {
+            Some(hash) => format!("sha256:{hash}"),
+            None => format!("asset:{}:{}", self.id, self.updated_at),
+        }
+    }
 }
 
 /// A release jar chosen for a build.
@@ -74,6 +100,9 @@ pub struct ReleaseJar {
     pub size: Option<u64>,
     /// Release tag, shown as the mod version.
     pub version: String,
+    /// See [`Asset::revision`].
+    pub revision: String,
+    pub sha256: Option<String>,
 }
 
 /// Picks the jar for a build from releases listed newest first: the first
@@ -95,6 +124,8 @@ pub fn pick_jar(
                 filename: jar.name.clone(),
                 size: jar.size,
                 version: release.tag_name.clone(),
+                revision: jar.revision(),
+                sha256: jar.sha256(),
             })
         })
 }
@@ -215,6 +246,9 @@ mod tests {
                     name: (*name).into(),
                     browser_download_url: format!("https://github.com/o/r/{name}"),
                     size: Some(1),
+                    id: 1,
+                    updated_at: "2026-01-01T00:00:00Z".into(),
+                    digest: None,
                 })
                 .collect(),
         }

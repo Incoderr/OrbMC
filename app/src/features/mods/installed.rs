@@ -87,6 +87,11 @@ struct Record {
     /// (`<index>/<ICON_CACHE>/<sha1>.png`) when the icon lives in the jar itself.
     #[serde(default)]
     icon_path: Option<String>,
+    /// Provider's identity of the downloaded file when its name alone does
+    /// not change between uploads (GitHub release assets can be re-uploaded
+    /// under the same name).
+    #[serde(default)]
+    revision: Option<String>,
 }
 
 /// Display metadata recorded together with an install, so the build page can
@@ -97,6 +102,7 @@ pub struct InstalledMeta {
     pub author: Option<String>,
     pub version: Option<String>,
     pub icon_url: Option<String>,
+    pub revision: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -194,6 +200,8 @@ pub struct InstalledModEntry {
     /// Catalog project of the file (`modrinth:…`, `curseforge:…`); `None`
     /// for hand-added mods the providers do not know.
     pub project: Option<String>,
+    /// See `Record::revision`.
+    pub revision: Option<String>,
     pub name: Option<String>,
     pub author: Option<String>,
     pub version: Option<String>,
@@ -216,6 +224,7 @@ pub fn list_entries(location: &ModsLocation) -> Vec<InstalledModEntry> {
             filename: record.filename.clone(),
             disabled: is_disabled(&location.mods, &record.filename),
             project: record.projects.first().cloned(),
+            revision: record.revision,
             name: record.name,
             author: record.author,
             version: record.version,
@@ -286,6 +295,7 @@ pub fn record_install(
         version: meta.version.clone(),
         icon_url: meta.icon_url.clone(),
         icon_path: None,
+        revision: meta.revision.clone(),
     });
     profile_store::write_json_atomically(&location.manifest(), &records).map_err(|e| e.to_string())
 }
@@ -298,6 +308,7 @@ pub fn replace_file(
     old_filename: &str,
     new_filename: &str,
     version: Option<String>,
+    revision: Option<String>,
 ) -> Result<(), String> {
     let sha1 = mc_launcher_core::io::hash::sha1_file(location.mods.join(new_filename))
         .map_err(|e| e.to_string())?;
@@ -308,8 +319,30 @@ pub fn replace_file(
         .find(|record| record.filename == old_filename)
         .cloned()
         .unwrap_or_default();
-    let disabled = is_disabled(&location.mods, old_filename);
-    remove_record_file(&location.mods, old_filename)?;
+    // Under the same name the new download already sits on the enabled
+    // path, so only the disabled copy tells the old state.
+    let disabled = if old_filename == new_filename {
+        location
+            .mods
+            .join(format!("{old_filename}{DISABLED_SUFFIX}"))
+            .exists()
+    } else {
+        is_disabled(&location.mods, old_filename)
+    };
+    if old_filename == new_filename {
+        // A re-uploaded file under the same name was downloaded over the
+        // enabled path; only a disabled copy is left to drop.
+        if disabled {
+            std::fs::remove_file(
+                location
+                    .mods
+                    .join(format!("{old_filename}{DISABLED_SUFFIX}")),
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    } else {
+        remove_record_file(&location.mods, old_filename)?;
+    }
     if disabled {
         set_disabled(&location.mods, new_filename, true)?;
     }
@@ -318,9 +351,25 @@ pub fn replace_file(
         filename: new_filename.into(),
         sha1,
         version: version.or(old.version),
+        revision: revision.or(old.revision),
         ..old
     });
     profile_store::write_json_atomically(&location.manifest(), &records).map_err(|e| e.to_string())
+}
+
+/// SHA-256 (hex) of an installed mod file, enabled or disabled.
+pub fn file_sha256(location: &ModsLocation, filename: &str) -> Option<String> {
+    use sha2::{Digest as _, Sha256};
+    let plain = location.mods.join(filename);
+    let path = if plain.exists() {
+        plain
+    } else {
+        location.mods.join(format!("{filename}{DISABLED_SUFFIX}"))
+    };
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).ok()?;
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 /// Deletes every mod file linked to `project` from the mods directory and
@@ -1251,6 +1300,7 @@ fn reconcile(files: &[mod_files::ModFile], cached: &[Record]) -> Vec<Record> {
                 version: previous.and_then(|record| record.version.clone()),
                 icon_url: previous.and_then(|record| record.icon_url.clone()),
                 icon_path: previous.and_then(|record| record.icon_path.clone()),
+                revision: previous.and_then(|record| record.revision.clone()),
             }
         })
         .collect()
@@ -1323,6 +1373,7 @@ mod tests {
             "a-1.jar",
             "a-2.jar",
             Some("2".into()),
+            None,
         )
         .unwrap();
 
@@ -1334,6 +1385,39 @@ mod tests {
         assert_eq!(entries[0].name.as_deref(), Some("A"));
         assert_eq!(entries[0].version.as_deref(), Some("2"));
         assert!(!directory.path().join("a-1.jar.disabled").exists());
+    }
+
+    #[test]
+    fn a_reupload_under_the_same_name_replaces_the_disabled_file() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("a.jar"), b"old").unwrap();
+        let meta = InstalledMeta {
+            revision: Some("r1".into()),
+            ..Default::default()
+        };
+        record_install(&location(&directory), "github:o/a".into(), "a.jar", &meta).unwrap();
+        set_disabled(directory.path(), "a.jar", true).unwrap();
+        // The new upload lands on the enabled path.
+        std::fs::write(directory.path().join("a.jar"), b"new").unwrap();
+
+        replace_file(
+            &location(&directory),
+            "a.jar",
+            "a.jar",
+            None,
+            Some("r2".into()),
+        )
+        .unwrap();
+
+        let entries = list_entries(&location(&directory));
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].disabled);
+        assert_eq!(entries[0].revision.as_deref(), Some("r2"));
+        assert_eq!(
+            std::fs::read(directory.path().join("a.jar.disabled")).unwrap(),
+            b"new"
+        );
+        assert!(!directory.path().join("a.jar").exists());
     }
 
     #[test]
@@ -1483,6 +1567,7 @@ mod tests {
                 author: Some("Kevin".into()),
                 version: Some("Example-1.2.3".into()),
                 icon_url: Some("https://cdn.example/a.png".into()),
+                revision: None,
             },
         )
         .unwrap();
@@ -1558,6 +1643,7 @@ mod tests {
             author: None,
             version: None,
             icon_url: None,
+            revision: None,
             icon_path: None,
         }
     }

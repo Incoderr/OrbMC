@@ -669,6 +669,7 @@ impl CatalogView {
             }),
             version: None,
             icon_url: project.image_url.clone(),
+            revision: None,
         };
         cx.notify();
 
@@ -917,11 +918,7 @@ impl CatalogView {
         let client = cx.http_client();
         let curseforge = super::curseforge_api();
         let task = cx.background_executor().spawn(async move {
-            let mods = installed::list_entries(&location)
-                .into_iter()
-                .filter_map(|entry| Some((entry.project?, entry.filename)))
-                .collect();
-            find_mod_updates(client, mods, compatibility, curseforge).await
+            find_mod_updates(client, &location, compatibility, curseforge).await
         });
         cx.spawn(async move |this, cx| {
             let updates = task.await;
@@ -993,6 +990,7 @@ impl CatalogView {
                 author: Some(owner),
                 version: None,
                 icon_url: None,
+                revision: None,
             },
             source: ModSource::All,
             compatibility: ModCompatibilityFilter {
@@ -1104,6 +1102,7 @@ impl CatalogView {
         let request = ModUpdate {
             project_id,
             filename: entry.filename.clone(),
+            revision: entry.revision.clone(),
             name: entry.name.clone(),
             compatibility: ModCompatibilityFilter {
                 game_version: profile.game_version.clone(),

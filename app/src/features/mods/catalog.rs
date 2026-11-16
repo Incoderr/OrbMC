@@ -597,6 +597,7 @@ pub async fn install_compatible_mod(
         meta.version = version_label
             .as_deref()
             .map(|label| compact_version(meta.name.as_deref(), label));
+        meta.revision = file.revision.clone();
         let filename = download_mod_file(
             client.clone(),
             &project,
@@ -620,7 +621,7 @@ pub async fn install_compatible_mod(
 /// update" and is only logged.
 pub async fn find_mod_updates(
     client: Arc<dyn HttpClient>,
-    mods: Vec<(String, String)>,
+    mods_location: &super::installed::ModsLocation,
     compatibility: ModCompatibilityFilter,
     curseforge: Option<CurseForgeApi>,
 ) -> std::collections::HashSet<String> {
@@ -628,8 +629,11 @@ pub async fn find_mod_updates(
 
     let compatibility = &compatibility;
     let curseforge = curseforge.as_ref();
+    let mods = super::installed::list_entries(mods_location)
+        .into_iter()
+        .filter_map(|entry| Some((entry.project.clone()?, entry)));
     futures::stream::iter(mods)
-        .map(|(project_id, filename)| {
+        .map(|(project_id, entry)| {
             let client = client.clone();
             async move {
                 let source = project_source(&project_id);
@@ -642,7 +646,10 @@ pub async fn find_mod_updates(
                 )
                 .await
                 {
-                    Ok((file, _, _)) => (file.filename != filename).then_some(filename),
+                    Ok((file, _, _)) => {
+                        is_new_file(&file, mods_location, &entry.filename, entry.revision.as_deref())
+                            .then_some(entry.filename)
+                    }
                     Err(error) => {
                         tracing::debug!(project = %project_id, error = %error.message, "mod update check failed");
                         None
@@ -654,6 +661,30 @@ pub async fn find_mod_updates(
         .filter_map(futures::future::ready)
         .collect()
         .await
+}
+
+/// Whether the provider's newest file differs from the installed one. A
+/// new name always does; under the same name a GitHub asset may have been
+/// re-uploaded, which its content hash or upload identity reveals.
+fn is_new_file(
+    file: &ProjectDownloadFile,
+    mods_location: &super::installed::ModsLocation,
+    filename: &str,
+    revision: Option<&str>,
+) -> bool {
+    if file.filename != filename {
+        return true;
+    }
+    if let Some(expected) = file.sha256.as_deref() {
+        // Hashing the local file also covers installs from before revisions
+        // were recorded.
+        return super::installed::file_sha256(mods_location, filename)
+            .is_some_and(|actual| actual != expected);
+    }
+    match (file.revision.as_deref(), revision) {
+        (Some(latest), Some(installed)) => latest != installed,
+        _ => false,
+    }
 }
 
 /// Provider of a prefixed project id (`modrinth:…`, `curseforge:…`).
@@ -669,6 +700,8 @@ fn project_source(project_id: &str) -> ModSource {
 pub struct ModUpdate {
     pub project_id: String,
     pub filename: String,
+    /// Recorded `InstalledMeta::revision` of the installed file.
+    pub revision: Option<String>,
     /// Display name, for shortening the provider's version label.
     pub name: Option<String>,
     pub compatibility: ModCompatibilityFilter,
@@ -688,6 +721,7 @@ pub async fn update_installed_mod(
     let ModUpdate {
         project_id,
         filename,
+        revision,
         name,
         compatibility,
         mods_location,
@@ -701,23 +735,29 @@ pub async fn update_installed_mod(
         curseforge.as_ref(),
     )
     .await?;
-    if file.filename == filename {
+    if !is_new_file(&file, &mods_location, &filename, revision.as_deref()) {
         return Ok(None);
     }
+    let new_revision = file.revision.clone();
     let new_filename =
         download_file_to_directory(client, file, &mods_location.mods, "jar", "mod", &transfer)
             .await?;
     let version = version_label
         .as_deref()
         .map(|label| compact_version(name.as_deref(), label));
-    super::installed::replace_file(&mods_location, &filename, &new_filename, version).map_err(
-        |error| {
-            provider_error(
-                source,
-                format!("Mod downloaded, but the old file could not be replaced: {error}"),
-            )
-        },
-    )?;
+    super::installed::replace_file(
+        &mods_location,
+        &filename,
+        &new_filename,
+        version,
+        new_revision,
+    )
+    .map_err(|error| {
+        provider_error(
+            source,
+            format!("Mod downloaded, but the old file could not be replaced: {error}"),
+        )
+    })?;
     Ok(Some(new_filename))
 }
 
@@ -820,6 +860,7 @@ impl From<ModMeta> for InstalledMeta {
             author: meta.author,
             version: None,
             icon_url: meta.icon_url,
+            revision: None,
         }
     }
 }
@@ -1084,6 +1125,8 @@ async fn resolve_compatible_mod_file(
             filename: jar.filename,
             sha1: None,
             size: jar.size,
+            revision: Some(jar.revision),
+            sha256: jar.sha256,
         };
         return Ok((file, Some(jar.version), Vec::new()));
     }
@@ -1145,6 +1188,8 @@ async fn resolve_compatible_mod_file(
                     filename: file.filename.clone(),
                     sha1: file.hashes.get("sha1").cloned(),
                     size: Some(file.size),
+                    revision: None,
+                    sha256: None,
                 },
                 version.version_number,
                 required_dependencies,
@@ -1220,6 +1265,8 @@ async fn resolve_compatible_mod_file(
                     filename: file.file_name,
                     sha1,
                     size: Some(file.file_length),
+                    revision: None,
+                    sha256: None,
                 },
                 file.display_name,
                 required_dependencies,
@@ -1284,6 +1331,8 @@ async fn resolve_compatible_content_file(
                 filename: file.filename.clone(),
                 sha1: file.hashes.get("sha1").cloned(),
                 size: Some(file.size),
+                revision: None,
+                sha256: None,
             })
         }
         ModSource::CurseForge => {
@@ -1347,6 +1396,8 @@ async fn resolve_compatible_content_file(
                 filename: file.file_name,
                 sha1,
                 size: Some(file.file_length),
+                revision: None,
+                sha256: None,
             })
         }
         ModSource::All => Err(provider_error(
@@ -1424,6 +1475,10 @@ struct ProjectDownloadFile {
     filename: String,
     sha1: Option<String>,
     size: Option<u64>,
+    /// See `InstalledMeta::revision`; GitHub assets only.
+    revision: Option<String>,
+    /// SHA-256 (hex) the provider publishes; GitHub assets only.
+    sha256: Option<String>,
 }
 
 fn collect_provider_results(
