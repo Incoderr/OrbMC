@@ -1056,6 +1056,37 @@ async fn resolve_compatible_mod_file(
     compatibility: &ModCompatibilityFilter,
     curseforge: Option<&CurseForgeApi>,
 ) -> Result<ResolvedDownload, CatalogProviderError> {
+    // GitHub mods are not in either catalog; `ModSource::All` marks them.
+    if let Some(repository) = super::github::repository_of(project_id) {
+        let jar = super::github::resolve_jar(
+            client,
+            repository,
+            compatibility.loader,
+            &compatibility.game_version,
+        )
+        .await
+        .map_err(|message| provider_error(ModSource::All, message))?
+        .ok_or_else(|| CatalogProviderError {
+            no_compatible_file: true,
+            ..provider_error(
+                ModSource::All,
+                format!(
+                    "No release of {repository} has a jar for this build \
+                     (Minecraft {}, {})",
+                    compatibility.game_version,
+                    compatibility.loader.modrinth_slug()
+                ),
+            )
+        })?;
+        let file = ProjectDownloadFile {
+            source: ModSource::All,
+            url: jar.url,
+            filename: jar.filename,
+            sha1: None,
+            size: jar.size,
+        };
+        return Ok((file, Some(jar.version), Vec::new()));
+    }
     match source {
         ModSource::Modrinth => {
             let id = project_id.strip_prefix("modrinth:").unwrap_or(project_id);

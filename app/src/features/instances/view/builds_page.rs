@@ -876,6 +876,16 @@ impl InstancesView {
                         .disabled(is_busy)
                         .on_click(add_mods),
                 )
+                .when(has_loader, |menu| {
+                    menu.item(
+                        PopupMenuItem::new(locale.text("Мод с GitHub…", "Mod from GitHub…"))
+                            .icon(IconName::Github)
+                            .disabled(is_busy)
+                            .on_click(action(|this, id, window, cx| {
+                                this.open_github_mod_dialog(id, window, cx)
+                            })),
+                    )
+                })
                 .when(quick_play, |menu| {
                     menu.item(
                         PopupMenuItem::new(locale.text("Зайти в мир…", "Join a world…"))
@@ -1415,6 +1425,28 @@ impl InstancesView {
                             .justify_end()
                             .gap_2()
                             // Keep the shared card actions close at hand.
+                            .when(profile.loader != LoaderChoice::Vanilla, |row| {
+                                let label = locale.text("Мод с GitHub", "Mod from GitHub");
+                                row.child(
+                                    UiButton::new(format!("details-github-mod-{profile_id}"))
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_2()
+                                        .rounded(px(7.))
+                                        .bg(rgb(palette.control))
+                                        .text_color(rgb(palette.muted))
+                                        .hover(|style| style.bg(rgb(palette.hover)))
+                                        .disabled(is_busy)
+                                        .accessibility_label(label)
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(label).build_animated(window, cx)
+                                        })
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.open_github_mod_dialog(profile_id, window, cx);
+                                        }))
+                                        .child(IconName::Github),
+                                )
+                            })
                             .child(
                                 UiButton::new(format!("details-folder-instance-{profile_id}"))
                                     .cursor_pointer()

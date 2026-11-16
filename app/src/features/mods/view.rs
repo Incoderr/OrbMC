@@ -954,6 +954,113 @@ impl CatalogView {
         self.start_mod_update(profile_id, next, true, window, cx);
     }
 
+    /// Installs the jar of the newest fitting GitHub release of `link`'s
+    /// repository. Returns `false` when the link is not a GitHub repository.
+    pub(crate) fn install_github_mod(
+        &mut self,
+        profile_id: InstanceId,
+        link: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(repository) = super::github::parse_repository(link) else {
+            return false;
+        };
+        let Some(profile) = self.instances.read(cx).profile(profile_id).cloned() else {
+            return true;
+        };
+        let previous_runtime = self.instances.read(cx).runtime(&profile_id);
+        if previous_runtime.is_busy() || self.mods.installed.is_loading(profile_id) {
+            return true;
+        }
+        let mods_location = match profile.mods_location() {
+            Ok(location) => location,
+            Err(error) => {
+                tracing::warn!(%profile_id, %error, "build data directory is unavailable");
+                return true;
+            }
+        };
+        let locale = self.locale;
+        let (owner, name) = repository
+            .split_once('/')
+            .map(|(owner, name)| (owner.to_owned(), name.to_owned()))
+            .unwrap_or_default();
+        let project_id = format!("{}{repository}", super::github::PROJECT_PREFIX);
+        let request = ModInstall {
+            project_id: project_id.clone(),
+            meta: installed::InstalledMeta {
+                name: Some(name.clone()),
+                author: Some(owner),
+                version: None,
+                icon_url: None,
+            },
+            source: ModSource::All,
+            compatibility: ModCompatibilityFilter {
+                game_version: profile.game_version.clone(),
+                loader: mod_loader_filter(profile.loader),
+            },
+            mods_location,
+        };
+        let transfer = TransferHandle::default();
+        self.instances.update(cx, |instances, _| {
+            instances.mark_mod_downloading(profile_id, name.clone(), transfer.clone())
+        });
+        self.watch_transfer(profile_id, cx);
+        let transfer = Transfer {
+            handle: transfer,
+            executor: cx.background_executor().clone(),
+        };
+        self.mods.installed.begin_install(&project_id);
+        let client = cx.http_client();
+        let task = cx
+            .background_executor()
+            .spawn(async move { install_compatible_mod(client, request, None, transfer).await });
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(outcome) => match outcome.files.first() {
+                        Some(filename) => {
+                            tracing::info!(%profile_id, %repository, %filename, "installed GitHub mod");
+                            this.mods
+                                .installed
+                                .mark_installed(profile_id, project_id.clone());
+                            this.instances.update(cx, |instances, _| {
+                                instances.mark_mod_downloaded(profile_id, filename.clone())
+                            });
+                            this.load_installed_entries(profile_id, cx);
+                        }
+                        None => {
+                            // Already recorded for this build: nothing was
+                            // downloaded, the update button covers it.
+                            this.instances.update(cx, |instances, _| {
+                                instances.restore_runtime(profile_id, previous_runtime)
+                            });
+                            window.push_notification(
+                                format!(
+                                    "{name}: {}",
+                                    locale.text("мод уже установлен", "already installed")
+                                ),
+                                cx,
+                            );
+                        }
+                    },
+                    Err(error) => {
+                        tracing::warn!(%profile_id, %repository, error = %error.message, "GitHub mod install failed");
+                        this.instances.update(cx, |instances, _| {
+                            instances.mark_mod_download_failed(profile_id, error.message)
+                        });
+                    }
+                }
+                this.mods.installed.finish_install(&project_id);
+                cx.notify();
+            });
+        })
+        .detach();
+        true
+    }
+
     /// Replaces an installed catalog mod with its newest compatible file.
     pub(crate) fn update_mod(
         &mut self,

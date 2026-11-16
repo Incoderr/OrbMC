@@ -3,6 +3,7 @@
 
 mod builds_page;
 mod export_dialog;
+mod github_dialog;
 mod home_page;
 mod loader_update;
 mod pack_import;

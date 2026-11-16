@@ -1,6 +1,7 @@
 use crate::features::settings::Locale;
 
 pub mod catalog;
+pub mod github;
 pub mod installed;
 pub mod translation;
 pub mod view;

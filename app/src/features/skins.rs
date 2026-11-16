@@ -9,6 +9,9 @@ const MAX_PNG_BYTES: usize = 2 * 1024 * 1024;
 
 pub use orbmc_core::minecraft::skin::SkinModel;
 
+/// The skins page is hidden from the sidebar until it is ready.
+pub const SKINS_ENABLED: bool = false;
+
 /// Stable identity of a saved skin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]

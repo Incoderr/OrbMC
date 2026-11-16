@@ -314,6 +314,7 @@ impl Render for LauncherApp {
 
         let navigation_items: Vec<_> = Page::LIBRARY
             .into_iter()
+            .filter(|page| *page != Page::Skins || crate::features::skins::SKINS_ENABLED)
             .enumerate()
             .map(|(index, page)| {
                 // Plays once: the sidebar stays mounted for the whole run.
